@@ -1,0 +1,9 @@
+meeting_id,customer_id,meeting_date,status,notes
+M001,C001,2026-09-05,completed,Kickoff review of onboarding progress.
+M002,C001,2026-10-01,missed,Customer did not join the renewal planning call.
+M003,C002,2026-09-20,completed,Quarterly business review.
+M004,C002,2026-10-22,scheduled,Planning session for next quarter.
+M005,C004,2026-09-25,completed,Training needs discussion.
+M006,C005,2026-09-29,missed,Customer cancelled at short notice.
+M007,C005,2026-10-15,scheduled,Renewal discussion.
+M008,C006,2026-10-08,completed,Support follow-up call.

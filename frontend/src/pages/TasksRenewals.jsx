@@ -3,7 +3,7 @@ import axios from 'axios'
 import { CheckSquare, Calendar, AlertTriangle, Clock, CheckCircle, Plus, X, User, Building } from 'lucide-react'
 import RiskBadge from '../components/RiskBadge'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 const EMPTY_TASK = {
   title: '',
@@ -148,7 +148,7 @@ export default function TasksRenewals() {
                   <tr
                     key={task.id}
                     className={`border-b border-[#1e2d3d] transition-colors ${
-                      task.status === 'Completed' ? 'opacity-40' : 'hover:bg-[#1a2942]'
+                      task.status === 'Completed' ? 'opacity-40' : 'hover:bg-indigo-50/60'
                     }`}
                   >
                     <td className="px-5 py-3 text-white text-xs font-medium max-w-[220px]">
@@ -218,7 +218,7 @@ export default function TasksRenewals() {
               </thead>
               <tbody>
                 {renewals.map(r => (
-                  <tr key={r.id} className="border-b border-[#1e2d3d] hover:bg-[#1a2942] transition-colors">
+                  <tr key={r.id} className="border-b border-slate-100 hover:bg-indigo-50/60 transition-colors">
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
                         <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white">
@@ -372,3 +372,4 @@ export default function TasksRenewals() {
 }
 
 const inputCls = 'w-full bg-[#0d1b2a] border border-[#1e2d3d] rounded-lg px-3 py-2 text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors'
+

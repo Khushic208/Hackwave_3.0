@@ -3,10 +3,10 @@ import axios from 'axios'
 import {
   Database, CheckCircle, Bot, Loader, Zap,
   ChevronDown, ChevronUp, AlertTriangle, TrendingDown, TrendingUp,
-  RefreshCw, GitMerge, Activity, Mail, Shield, User
+  RefreshCw, GitMerge, Activity, Shield, User
 } from 'lucide-react'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 export default function SignalsIntegrations() {
   const [syncing, setSyncing] = useState(false)
@@ -35,19 +35,19 @@ export default function SignalsIntegrations() {
     setSyncLog([])
 
     try {
-      addLog('Connecting to HubSpot API...')
-      addLog('Fetching contacts, deals, and email activity...')
+      addLog('Connecting to your data sources...')
+      addLog('Fetching contacts, deals, and activity...')
 
       const res = await axios.post(`${API}/sync/hubspot`, {}, { timeout: 120000 })
 
       if (res.data.total === 0) {
-        setError(res.data.message || 'No customers found. Add contacts with email addresses in HubSpot first.')
+        setError(res.data.message || 'No customer records found. Add customer records with names and email addresses, then try again.')
         setSyncing(false)
         return
       }
 
-      addLog(`Fetched ${res.data.total} customers from HubSpot`)
-      if (res.data.gmailEnriched) addLog('Gmail signals enriched via Composio')
+      addLog(`Fetched ${res.data.total} customer records`)
+      if (res.data.gmailEnriched) addLog('Communication signals enriched')
       addLog('Running AI risk analysis on each customer...')
       addLog(`✅ Analysis complete — ${res.data.total} customers scored`)
 
@@ -68,26 +68,27 @@ export default function SignalsIntegrations() {
   const lowCount = results.filter(r => r.riskLevel === 'Low').length
 
   return (
-    <div className="space-y-6">
+    <div className="signals-page space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-white flex items-center gap-2">
-          <Zap size={20} className="text-yellow-400" /> Signals & Integrations
+      <div className="signals-header">
+        <h1 className="flex items-center gap-3">
+          <span className="page-icon signals-page-icon"><Zap size={21} /></span>
+          Signals &amp; Integrations
         </h1>
-        <p className="text-sm text-slate-400 mt-1">
+        <p className="text-base text-slate-500 mt-2 ml-14">
           Connect your real CRM data → AI calculates risk scores → Explains why each customer is at risk
         </p>
       </div>
 
       {/* Pipeline steps */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="signals-steps grid grid-cols-4 gap-3">
         {[
-          { step: '01', label: 'Fetch HubSpot Data', done: synced, icon: Database, color: 'bg-blue-600' },
+          { step: '01', label: 'Fetch Customer Data', done: synced, icon: Database, color: 'bg-blue-600' },
           { step: '02', label: 'Extract Signals', done: synced, icon: Activity, color: 'bg-purple-600' },
           { step: '03', label: 'Calculate Risk Score', done: synced, icon: Shield, color: 'bg-orange-600' },
           { step: '04', label: 'AI Explanation', done: synced && results.length > 0, icon: Bot, color: 'bg-green-600' },
         ].map((s, i) => (
-          <div key={i} className={`bg-[#112240] rounded-xl border p-4 transition-colors ${s.done ? 'border-blue-500/40' : 'border-[#1e2d3d]'}`}>
+          <div key={i} className={`signal-step ${s.done ? 'is-done' : ''}`}>
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center mb-2 ${s.done ? s.color : 'bg-[#1a2942]'}`}>
               <s.icon size={14} className={s.done ? 'text-white' : 'text-slate-600'} />
             </div>
@@ -99,37 +100,30 @@ export default function SignalsIntegrations() {
       </div>
 
       {/* Main Sync Card */}
-      <div className={`bg-[#112240] rounded-xl border p-6 ${synced ? 'border-green-500/30' : 'border-[#1e2d3d]'}`}>
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-4">
-            {/* HubSpot + Composio logos */}
+      <div className={`signal-sync-card ${synced ? 'is-synced' : ''}`}>
+        <div className="signal-sync-layout flex items-start justify-between gap-4 flex-wrap">
+          <div className="signal-connection flex items-center gap-4">
+            {/* Connected data sources */}
             <div className="flex items-center gap-2">
-              <div className="w-12 h-12 bg-[#FF7A59] rounded-xl flex items-center justify-center text-white font-bold">HS</div>
-              <div className="text-slate-500 text-lg">+</div>
-              <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center">
-                <Mail size={18} className="text-white" />
+              <div className="w-12 h-12 bg-teal-600 rounded-xl flex items-center justify-center">
+                <Database size={21} className="text-white" />
               </div>
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-sm font-bold text-white">HubSpot CRM + Gmail</h3>
-                {status?.hubspot?.connected && (
-                  <span className="text-[10px] text-green-400 bg-green-500/10 border border-green-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
-                    <CheckCircle size={8}/> API Connected
-                  </span>
-                )}
-                {status?.gmail?.connected && (
-                  <span className="text-[10px] text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
-                    <CheckCircle size={8}/> Gmail Connected
+                <h3 className="text-lg font-semibold text-white">Connected customer data</h3>
+                {status && (status.hubspot?.connected || status.gmail?.connected) && (
+                  <span className="text-[10px] text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <CheckCircle size={8}/> Sources connected
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-400 mt-1">
-                Fetches real customer contacts, deal stages, email activity, and support data. AI analyzes all signals to calculate churn risk.
+              <p className="text-sm text-slate-500 mt-1">
+                Fetches customer contacts, deal stages, communication activity, and support data. AI analyzes all signals to calculate churn risk.
               </p>
               {/* What gets fetched */}
               <div className="flex flex-wrap gap-1.5 mt-2">
-                {['Contacts & Emails', 'Deal Stage & ARR', 'Last Activity', 'Email Opens/Replies', 'Support Tickets', 'Renewal Dates'].map(f => (
+                {['Contacts & Emails', 'Deal Stage & ARR', 'Last Activity', 'Email Activity', 'Support Tickets', 'Renewal Dates'].map(f => (
                   <span key={f} className="text-[10px] px-2 py-0.5 rounded-full border bg-blue-500/10 border-blue-500/20 text-blue-300">{f}</span>
                 ))}
               </div>
@@ -168,7 +162,7 @@ export default function SignalsIntegrations() {
               <div className="font-medium">{error}</div>
               {error.includes('No contacts') && (
                 <div className="mt-1 text-red-400/70">
-                  Go to HubSpot → Contacts → Add contacts with name and email address, then sync again.
+                  Add contacts with name and email address, then sync again.
                 </div>
               )}
             </div>
@@ -180,8 +174,8 @@ export default function SignalsIntegrations() {
       {synced && results.length > 0 && (
         <div className="space-y-4">
           {/* Summary */}
-          <div className="flex items-center gap-4 flex-wrap">
-            <h3 className="text-sm font-semibold text-white">{results.length} customers analyzed</h3>
+          <div className="signals-results-summary flex items-center gap-4 flex-wrap">
+              <h3 className="text-base font-semibold text-white">{results.length} customers analyzed</h3>
             <div className="flex items-center gap-2">
               {highCount > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400">{highCount} High</span>}
               {medCount > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400">{medCount} Medium</span>}
@@ -204,10 +198,10 @@ export default function SignalsIntegrations() {
 
       {/* Empty state */}
       {!syncing && !synced && !error && (
-        <div className="flex flex-col items-center justify-center py-16 bg-[#112240] rounded-xl border border-[#1e2d3d] text-slate-500">
-          <Database size={40} className="mb-3 opacity-30"/>
-          <p className="text-sm font-medium text-slate-400">Ready to sync real customer data</p>
-          <p className="text-xs mt-1">Click "Sync & Analyze with AI" to fetch your HubSpot contacts</p>
+        <div className="signals-empty">
+          <div className="signals-empty-icon"><Database size={30}/></div>
+          <p className="text-lg font-medium text-slate-700">Ready to sync real customer data</p>
+          <p className="text-sm mt-1 text-slate-500">Click “Sync &amp; Analyze with AI” to fetch your customer records</p>
         </div>
       )}
     </div>
@@ -229,7 +223,7 @@ function CustomerResultCard({ result, expanded, onToggle }) {
     <div className={`bg-[#112240] rounded-xl border overflow-hidden transition-all ${expanded ? lc.border : 'border-[#1e2d3d]'}`}>
       {/* Row */}
       <div
-        className="flex items-center gap-4 px-5 py-4 cursor-pointer hover:bg-[#1a2942] transition-colors"
+        className="flex items-center gap-4 px-5 py-4 cursor-pointer hover:bg-indigo-50/60 transition-colors"
         onClick={onToggle}
       >
         {/* Avatar */}
@@ -244,8 +238,10 @@ function CustomerResultCard({ result, expanded, onToggle }) {
             {result.company && result.company !== result.name && (
               <span className="text-[10px] text-slate-500 bg-[#1a2942] px-2 py-0.5 rounded-full border border-[#1e2d3d]">{result.company}</span>
             )}
-            <span className="text-[10px] text-green-400/70 flex items-center gap-0.5">
-              <Database size={8}/> HubSpot Live
+            <span className={`text-[10px] flex items-center gap-0.5 ${
+              result.source === 'Local demo data' ? 'text-slate-500' : 'text-teal-700'
+            }`}>
+              <Database size={8}/> {result.source === 'Local demo data' ? 'Demo data' : 'Live data'}
             </span>
           </div>
           <div className="text-xs text-slate-400 mt-0.5">
@@ -403,3 +399,4 @@ function ExpandedDetail({ result, lc }) {
     </div>
   )
 }
+

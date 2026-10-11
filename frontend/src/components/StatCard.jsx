@@ -5,7 +5,7 @@ export default function StatCard({ title, value, change, changeType, icon: Icon,
   const isPositive = changeType === 'up'
 
   return (
-    <div className="bg-[#112240] rounded-xl p-5 border border-[#1e2d3d] hover:border-blue-500/40 transition-colors">
+    <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-200 transition-all">
       <div className="flex items-start justify-between mb-3">
         <div className={`w-10 h-10 ${iconBg} rounded-lg flex items-center justify-center`}>
           <Icon size={18} className="text-white" />
@@ -17,9 +17,10 @@ export default function StatCard({ title, value, change, changeType, icon: Icon,
           </span>
         )}
       </div>
-      <div className="text-2xl font-bold text-white mb-1">{value}</div>
-      <div className="text-sm text-slate-400">{title}</div>
-      {subtitle && <div className="text-xs text-slate-500 mt-1">{subtitle}</div>}
+      <div className="text-2xl font-semibold text-slate-900 mb-1">{value}</div>
+      <div className="text-sm text-slate-600">{title}</div>
+      {subtitle && <div className="text-xs text-slate-400 mt-1">{subtitle}</div>}
     </div>
   )
 }
+

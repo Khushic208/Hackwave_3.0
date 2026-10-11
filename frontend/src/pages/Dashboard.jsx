@@ -1,16 +1,13 @@
 import React, { useEffect, useState } from 'react'
 import axios from 'axios'
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-  PieChart, Pie, Cell
-} from 'recharts'
+import { PieChart, Pie, Cell } from 'recharts'
 import {
   Users, ShieldAlert, DollarSign, Calendar, ArrowUpRight, ArrowDownRight,
   TrendingUp, CheckCircle, XCircle, Zap, ChevronRight, Bot
 } from 'lucide-react'
 import RiskBadge from '../components/RiskBadge'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 const RISK_COLORS = { 'High Risk': '#ef4444', 'Medium Risk': '#f59e0b', 'Low Risk': '#22c55e' }
 const CONFIDENCE_COLORS = { High: 'text-green-400', Medium: 'text-yellow-400', Low: 'text-red-400' }
@@ -18,7 +15,6 @@ const CONFIDENCE_COLORS = { High: 'text-green-400', Medium: 'text-yellow-400', L
 export default function Dashboard({ onSelectCustomer }) {
   const [stats, setStats] = useState(null)
   const [customers, setCustomers] = useState([])
-  const [riskTrend, setRiskTrend] = useState([])
   const [revenueExposure, setRevenueExposure] = useState([])
   const [signalCoverage, setSignalCoverage] = useState(null)
   const [opportunities, setOpportunities] = useState([])
@@ -29,14 +25,12 @@ export default function Dashboard({ onSelectCustomer }) {
     return Promise.all([
       axios.get(`${API}/stats`),
       axios.get(`${API}/customers`),
-      axios.get(`${API}/risk-trend`),
       axios.get(`${API}/revenue-exposure`),
       axios.get(`${API}/signal-coverage`),
       axios.get(`${API}/opportunities`),
-    ]).then(([s, c, rt, re, sc, op]) => {
+    ]).then(([s, c, re, sc, op]) => {
       setStats(s.data)
       setCustomers(c.data)
-      setRiskTrend(rt.data)
       setRevenueExposure(re.data)
       setSignalCoverage(sc.data)
       setOpportunities(op.data)
@@ -70,20 +64,26 @@ export default function Dashboard({ onSelectCustomer }) {
 
   if (!stats) return null
 
-  const trendData = riskTrend.filter((_, i) => i % 3 === 0)
+  const riskMix = [
+    { name: 'High risk', value: stats.highRisk, color: '#f43f5e' },
+    { name: 'Medium risk', value: customers.filter(c => c.riskLevel === 'Medium').length, color: '#f59e0b' },
+    { name: 'Healthy', value: customers.filter(c => c.riskLevel === 'Low').length, color: '#10b981' },
+  ]
+  const totalAccounts = riskMix.reduce((sum, item) => sum + item.value, 0)
 
   return (
     <div className="space-y-6">
-      {/* Greeting */}
+      {/* Overview heading */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-bold text-white">Good Morning, Rahul! 👋</h1>
-          <p className="text-sm text-slate-400 mt-1">Here's your revenue health overview and key actions for today.</p>
+          <p className="section-kicker">Portfolio overview</p>
+          <h1 className="text-white">Revenue health</h1>
+          <p className="text-slate-500 mt-2">A focused view of account health, exposure and upcoming renewals.</p>
         </div>
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white bg-[#112240] border border-[#1e2d3d] hover:border-blue-500/40 rounded-lg px-3 py-2 transition-all disabled:opacity-50"
+          className="flex items-center gap-1.5 text-xs text-indigo-700 hover:text-indigo-800 bg-white border border-slate-200 hover:border-indigo-300 hover:shadow-sm rounded-xl px-3 py-2 transition-all disabled:opacity-50"
         >
           <Bot size={13} className={refreshing ? 'animate-spin' : ''} />
           {refreshing ? 'Refreshing...' : 'Refresh'}
@@ -92,34 +92,59 @@ export default function Dashboard({ onSelectCustomer }) {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={Users} iconBg="bg-blue-600" title="Total Accounts" value={stats.totalAccounts} change={stats.totalAccountsChange} up subtitle="vs. last 30 days" />
-        <StatCard icon={ShieldAlert} iconBg="bg-red-600" title="High Risk" value={stats.highRisk} change={stats.highRiskChange} up={false} subtitle="needs attention" />
-        <StatCard icon={DollarSign} iconBg="bg-orange-500" title="Revenue at Risk" value={stats.revenueAtRisk} change={stats.revenueAtRiskChange} up={false} subtitle="from high risk accounts" />
-        <StatCard icon={Calendar} iconBg="bg-purple-600" title="Renewals in 30 Days" value={stats.renewalsIn30Days} subtitle="upcoming" extra={`${stats.pendingApprovals} pending approvals`} />
+        <StatCard icon={Users} iconBg="bg-blue-600" title="Total Accounts" value={stats.totalAccounts} change={stats.totalAccountsChange} up subtitle="vs. last 30 days" progress={100} progressLabel="Accounts monitored" />
+        <StatCard icon={ShieldAlert} iconBg="bg-red-600" title="High Risk" value={stats.highRisk} change={stats.highRiskChange} up={false} subtitle="needs attention" progress={stats.totalAccounts ? (stats.highRisk / stats.totalAccounts) * 100 : 0} progressLabel="of total accounts" />
+        <StatCard icon={DollarSign} iconBg="bg-orange-500" title="Revenue at Risk" value={stats.revenueAtRisk} change={stats.revenueAtRiskChange} up={false} subtitle="from high risk accounts" progress={stats.highRisk ? 75 : 0} progressLabel="exposure requiring review" />
+        <StatCard icon={Calendar} iconBg="bg-purple-600" title="Renewals in 30 Days" value={stats.renewalsIn30Days} subtitle="upcoming" extra={`${stats.pendingApprovals} pending approvals`} progress={stats.totalAccounts ? (stats.renewalsIn30Days / stats.totalAccounts) * 100 : 0} progressLabel="of total accounts" />
       </div>
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Risk Trend */}
-        <div className="lg:col-span-2 bg-[#112240] rounded-xl border border-[#1e2d3d] p-5">
+        <div className="lg:col-span-2 dashboard-panel rounded-2xl border border-slate-200 p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-sm font-semibold text-white">Risk Trend</h3>
-              <p className="text-xs text-slate-500">Last 30 Days</p>
+              <p className="section-kicker">Account health</p>
+              <h3 className="text-white mt-1">Portfolio risk mix</h3>
+              <p className="text-sm text-slate-500 mt-1">A clear breakdown of account health today</p>
+            </div>
+            <div className="trend-status">
+              <span className="trend-status-dot" />
+              Updated today
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={trendData} margin={{ top: 0, right: 10, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e2d3d" />
-              <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} />
-              <YAxis tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ background: '#0d1b2a', border: '1px solid #1e2d3d', borderRadius: 8, fontSize: 12 }} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Line type="monotone" dataKey="highRisk" name="High Risk" stroke="#ef4444" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="mediumRisk" name="Medium Risk" stroke="#f59e0b" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="lowRisk" name="Low Risk" stroke="#22c55e" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="risk-mix-layout">
+            <div className="risk-donut-wrap">
+              <PieChart width={210} height={210}>
+                <Pie data={riskMix} cx={105} cy={105} innerRadius={67} outerRadius={91} paddingAngle={4} dataKey="value" startAngle={90} endAngle={-270} stroke="none">
+                  {riskMix.map(item => <Cell key={item.name} fill={item.color} />)}
+                </Pie>
+              </PieChart>
+              <div className="risk-donut-center">
+                <strong>{totalAccounts}</strong>
+                <span>accounts</span>
+              </div>
+            </div>
+            <div className="risk-mix-legend">
+              {riskMix.map(item => {
+                const percentage = totalAccounts ? Math.round((item.value / totalAccounts) * 100) : 0
+                return (
+                  <div className="risk-mix-row" key={item.name}>
+                    <div className="risk-mix-label">
+                      <span className="risk-mix-dot" style={{ background: item.color }} />
+                      <span>{item.name}</span>
+                    </div>
+                    <strong>{item.value}</strong>
+                    <span className="risk-mix-percent">{percentage}%</span>
+                  </div>
+                )
+              })}
+              <div className="risk-mix-footnote">
+                <span className="trend-status-dot" />
+                No change in the last 7 days
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Revenue Exposure + Signal Coverage */}
@@ -228,7 +253,7 @@ export default function Dashboard({ onSelectCustomer }) {
                   <tr
                     key={c.id}
                     onClick={() => onSelectCustomer(c.id)}
-                    className={`border-b border-[#1e2d3d] hover:bg-[#1a2942] cursor-pointer transition-colors ${i === 0 ? 'bg-blue-900/10' : ''}`}
+                    className={`border-b border-slate-100 hover:bg-indigo-50/60 cursor-pointer transition-colors ${i === 0 ? 'bg-indigo-50/50' : ''}`}
                   >
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
@@ -300,7 +325,7 @@ export default function Dashboard({ onSelectCustomer }) {
               { label: 'Export Report', icon: '📊', color: 'teal' },
               { label: 'Sync CRM Data', icon: '🔄', color: 'cyan' },
             ].map((action, i) => (
-              <button key={i} className="flex items-center gap-2 bg-[#1a2942] hover:bg-[#1e3358] border border-[#1e2d3d] hover:border-blue-500/50 rounded-lg px-3 py-2.5 text-xs text-slate-300 hover:text-white transition-all text-left">
+              <button key={i} className="flex items-center gap-2 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-xl px-3 py-2.5 text-xs text-slate-600 hover:text-indigo-800 transition-all text-left">
                 <span className="text-base">{action.icon}</span>
                 <span>{action.label}</span>
               </button>
@@ -312,9 +337,9 @@ export default function Dashboard({ onSelectCustomer }) {
   )
 }
 
-function StatCard({ icon: Icon, iconBg, title, value, change, up, subtitle, extra }) {
+function StatCard({ icon: Icon, iconBg, title, value, change, up, subtitle, extra, progress, progressLabel }) {
   return (
-    <div className="bg-[#112240] rounded-xl p-4 border border-[#1e2d3d] hover:border-blue-500/40 transition-colors">
+    <div className="dashboard-stat-card bg-[#112240] rounded-xl p-4 border border-[#1e2d3d] hover:border-blue-500/40 transition-colors">
       <div className="flex items-start justify-between mb-2">
         <div className={`w-9 h-9 ${iconBg} rounded-lg flex items-center justify-center`}>
           <Icon size={16} className="text-white" />
@@ -330,6 +355,12 @@ function StatCard({ icon: Icon, iconBg, title, value, change, up, subtitle, extr
       <div className="text-xs text-slate-400 mt-0.5">{title}</div>
       {subtitle && <div className="text-[11px] text-slate-500 mt-0.5">{subtitle}</div>}
       {extra && <div className="text-[11px] text-slate-500 mt-0.5">{extra}</div>}
+      <div className="dashboard-stat-detail">
+        <div className="dashboard-stat-track">
+          <span style={{ width: `${Math.min(Math.max(progress || 0, 0), 100)}%` }} />
+        </div>
+        <span>{progressLabel}</span>
+      </div>
     </div>
   )
 }
@@ -340,3 +371,4 @@ function RiskScore({ score, level }) {
     <span className={`font-bold text-xs ${color}`}>{score}</span>
   )
 }
+

@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Settings as SettingsIcon, Database, Mail, Calendar, Activity, Headphones, CheckCircle, XCircle, Save, RefreshCw } from 'lucide-react'
+import { Settings as SettingsIcon, Database, Mail, Calendar, Activity, Headphones, CheckCircle, XCircle, Save, RefreshCw, Moon, Sun } from 'lucide-react'
 
 const integrations = [
   { id: 'crm', label: 'CRM', icon: Database, connected: true, description: 'Salesforce / HubSpot', lastSync: 'Apr 27, 2025' },
@@ -9,7 +9,7 @@ const integrations = [
   { id: 'support', label: 'Support', icon: Headphones, connected: false, description: 'Zendesk / Intercom', lastSync: null },
 ]
 
-export default function Settings() {
+export default function Settings({ darkMode, onToggleDarkMode }) {
   const [saved, setSaved] = useState(false)
   const [aiEnabled, setAiEnabled] = useState(true)
   const [autoApprove, setAutoApprove] = useState(false)
@@ -33,6 +33,22 @@ export default function Settings() {
           <SettingsIcon size={18} className="text-slate-400" /> Settings
         </h1>
         <p className="text-sm text-slate-400">Configure integrations, AI behavior, and notifications</p>
+      </div>
+
+      <div className="bg-[#112240] rounded-xl border border-[#1e2d3d] p-5 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="settings-icon w-9 h-9 rounded-xl flex items-center justify-center">
+            {darkMode ? <Moon size={16} /> : <Sun size={16} />}
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-white">Appearance</h3>
+            <p className="text-xs text-slate-400">Choose the workspace theme that feels best for you</p>
+          </div>
+        </div>
+        <button onClick={onToggleDarkMode} className="theme-switch flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium">
+          {darkMode ? 'Dark mode' : 'Light mode'}
+          <span className={`theme-switch-dot w-2 h-2 rounded-full ${darkMode ? 'bg-indigo-400' : 'bg-amber-400'}`} />
+        </button>
       </div>
 
       {/* Integrations */}
@@ -149,3 +165,4 @@ function ToggleSetting({ label, description, value, onChange }) {
     </div>
   )
 }
+

@@ -3,7 +3,7 @@ import axios from 'axios'
 import { Search, Filter, ArrowUpRight, ArrowDownRight, ChevronRight, Users } from 'lucide-react'
 import RiskBadge from '../components/RiskBadge'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 export default function Customers({ onSelectCustomer }) {
   const [customers, setCustomers] = useState([])
@@ -100,7 +100,7 @@ export default function Customers({ onSelectCustomer }) {
               <tr
                 key={c.id}
                 onClick={() => onSelectCustomer(c.id)}
-                className="border-b border-[#1e2d3d] hover:bg-[#1a2942] cursor-pointer transition-colors"
+                className="border-b border-slate-100 hover:bg-indigo-50/60 cursor-pointer transition-colors"
               >
                 <td className="px-5 py-3">
                   <div className="flex items-center gap-2">
@@ -149,3 +149,4 @@ export default function Customers({ onSelectCustomer }) {
     </div>
   )
 }
+

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import axios from 'axios'
 import { AlertTriangle, TrendingUp, DollarSign, Calendar, ChevronRight, Shield } from 'lucide-react'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 export default function RiskOpportunities() {
   const [customers, setCustomers] = useState([])
@@ -43,10 +43,11 @@ export default function RiskOpportunities() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-xl font-bold text-white flex items-center gap-2">
-          <AlertTriangle size={20} className="text-red-400" /> Risk &amp; Opportunities
+        <h1 className="text-white flex items-center gap-3">
+          <span className="page-icon risk-page-icon"><AlertTriangle size={21} /></span>
+          Risk &amp; Opportunities
         </h1>
-        <p className="text-sm text-slate-400 mt-1">
+        <p className="text-base text-slate-500 mt-2 ml-14">
           Monitor high-risk accounts and identify revenue expansion opportunities.
         </p>
       </div>
@@ -58,35 +59,39 @@ export default function RiskOpportunities() {
           iconBg="bg-red-600"
           title="High Risk Accounts"
           value={highRisk.length}
-          subtitle="need immediate attention"
+          subtitle="Need immediate attention"
+          accent="risk-card-danger"
         />
         <StatCard
           icon={DollarSign}
           iconBg="bg-orange-500"
           title="ARR at Risk"
           value={formatArr(totalArrAtRisk)}
-          subtitle="from high risk accounts"
+          subtitle="From high-risk accounts"
+          accent="risk-card-revenue"
         />
         <StatCard
           icon={Shield}
           iconBg="bg-yellow-600"
           title="Avg Risk Score"
           value={avgRiskScore > 0 ? avgRiskScore : '—'}
-          subtitle="across high risk accounts"
+          subtitle="Across high-risk accounts"
+          accent="risk-card-score"
         />
         <StatCard
           icon={Calendar}
           iconBg="bg-purple-600"
           title="Renewals &lt;30 Days"
           value={renewalsUnder30}
-          subtitle="urgent renewal window"
+          subtitle="Urgent renewal window"
+          accent="risk-card-renewal"
         />
       </div>
 
       {/* High Risk Accounts Table */}
       <div className="bg-[#112240] rounded-xl border border-[#1e2d3d] overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#1e2d3d]">
-          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <h3 className="text-base font-semibold text-white flex items-center gap-2">
             <AlertTriangle size={15} className="text-red-400" /> High Risk Accounts
           </h3>
           <span className="text-xs text-slate-500">{highRisk.length} accounts</span>
@@ -116,7 +121,7 @@ export default function RiskOpportunities() {
                 {highRisk.map((c, i) => (
                   <tr
                     key={c.id}
-                    className={`border-b border-[#1e2d3d] hover:bg-[#1a2942] transition-colors ${i === 0 ? 'bg-red-900/10' : ''}`}
+                    className={`border-b border-slate-100 hover:bg-indigo-50/60 transition-colors ${i === 0 ? 'bg-rose-50/60' : ''}`}
                   >
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
@@ -164,7 +169,7 @@ export default function RiskOpportunities() {
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
             <TrendingUp size={15} className="text-green-400" /> Expansion Opportunities
           </h3>
-          <span className="text-xs text-slate-500">{expansionCandidates.length} accounts</span>
+          <span className="text-sm text-slate-600">{expansionCandidates.length} accounts</span>
         </div>
 
         {expansionCandidates.length === 0 ? (
@@ -181,7 +186,7 @@ export default function RiskOpportunities() {
                 c.expansionOpportunity !== 'None identified'
               const confidenceLevel = c.riskLevel === 'Low' ? 'High' : 'Medium'
               return (
-                <div key={c.id} className="flex items-start justify-between px-5 py-4 hover:bg-[#1a2942] transition-colors">
+                <div key={c.id} className="flex items-start justify-between px-5 py-4 hover:bg-indigo-50/60 transition-colors">
                   <div className="flex items-start gap-3 flex-1 min-w-0">
                     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-500 to-teal-600 flex items-center justify-center text-xs font-bold text-white flex-shrink-0 mt-0.5">
                       {c.name[0]}
@@ -192,7 +197,7 @@ export default function RiskOpportunities() {
                         <span className="text-[10px] text-slate-500">{c.industry}</span>
                       </div>
                       {hasOpportunity ? (
-                        <p className="text-xs text-green-300 mt-0.5 line-clamp-2">{c.expansionOpportunity}</p>
+                        <p className="expansion-opportunity-text mt-0.5 line-clamp-2">{c.expansionOpportunity}</p>
                       ) : (
                         <p className="text-xs text-slate-400 mt-0.5">Healthy account — ideal renewal candidate</p>
                       )}
@@ -225,17 +230,17 @@ export default function RiskOpportunities() {
   )
 }
 
-function StatCard({ icon: Icon, iconBg, title, value, subtitle }) {
+function StatCard({ icon: Icon, iconBg, title, value, subtitle, accent }) {
   return (
-    <div className="bg-[#112240] rounded-xl p-4 border border-[#1e2d3d] hover:border-blue-500/40 transition-colors">
-      <div className="flex items-start justify-between mb-2">
-        <div className={`w-9 h-9 ${iconBg} rounded-lg flex items-center justify-center`}>
-          <Icon size={16} className="text-white" />
+    <div className={`risk-metric-card ${accent || ''}`}>
+      <div className="risk-metric-top">
+        <div className={`risk-metric-icon ${iconBg}`}>
+          <Icon size={19} className="text-white" />
         </div>
       </div>
-      <div className="text-2xl font-bold text-white mt-2">{value}</div>
-      <div className="text-xs text-slate-400 mt-0.5">{title}</div>
-      {subtitle && <div className="text-[11px] text-slate-500 mt-0.5">{subtitle}</div>}
+      <div className="risk-metric-value">{value}</div>
+      <div className="risk-metric-title">{title}</div>
+      {subtitle && <div className="risk-metric-subtitle">{subtitle}</div>}
     </div>
   )
 }
@@ -267,3 +272,4 @@ function ConfidenceBadge({ level }) {
     </span>
   )
 }
+

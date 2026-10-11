@@ -10,7 +10,7 @@ import {
   RadialBarChart, RadialBar, PolarAngleAxis, ResponsiveContainer
 } from 'recharts'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 const TABS = ['Overview', 'Signals', 'AI Analysis', 'Actions', 'History']
 
@@ -401,3 +401,4 @@ function EngCard({ icon: Icon, color, label, value, warn }) {
     </div>
   )
 }
+

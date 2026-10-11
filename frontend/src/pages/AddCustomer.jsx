@@ -5,7 +5,7 @@ import {
   Headphones, DollarSign, Clock, CheckCircle, AlertTriangle, Loader
 } from 'lucide-react'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 export default function AddCustomer({ onCustomerAdded }) {
   const [form, setForm] = useState({
@@ -267,3 +267,4 @@ function Field({ label, icon: Icon, children }) {
     </div>
   )
 }
+

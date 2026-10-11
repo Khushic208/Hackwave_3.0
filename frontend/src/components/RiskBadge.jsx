@@ -2,9 +2,9 @@ import React from 'react'
 
 export default function RiskBadge({ level }) {
   const colors = {
-    High: 'bg-red-500/20 text-red-400 border border-red-500/30',
-    Medium: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
-    Low: 'bg-green-500/20 text-green-400 border border-green-500/30',
+    High: 'bg-rose-50 text-rose-700 border border-rose-200',
+    Medium: 'bg-amber-50 text-amber-700 border border-amber-200',
+    Low: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
   }
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${colors[level] || colors.Low}`}>
@@ -12,3 +12,4 @@ export default function RiskBadge({ level }) {
     </span>
   )
 }
+

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import axios from 'axios'
 import { AlertTriangle, TrendingUp, DollarSign, Calendar, ChevronRight, Shield } from 'lucide-react'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 export default function RiskOpportunities() {
   const [customers, setCustomers] = useState([])
@@ -272,3 +272,4 @@ function ConfidenceBadge({ level }) {
     </span>
   )
 }
+

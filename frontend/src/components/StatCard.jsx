@@ -23,3 +23,4 @@ export default function StatCard({ title, value, change, changeType, icon: Icon,
     </div>
   )
 }
+

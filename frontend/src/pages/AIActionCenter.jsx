@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import axios from 'axios'
 import { Bot, Zap, CheckCircle, Clock, AlertTriangle, TrendingUp, Mail, Database, RefreshCw } from 'lucide-react'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 export default function AIActionCenter() {
   const [customers, setCustomers] = useState([])
@@ -193,3 +193,4 @@ export default function AIActionCenter() {
     </div>
   )
 }
+

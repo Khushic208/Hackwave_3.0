@@ -6,7 +6,7 @@ import {
   RefreshCw, GitMerge, Activity, Shield, User
 } from 'lucide-react'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 export default function SignalsIntegrations() {
   const [syncing, setSyncing] = useState(false)
@@ -399,3 +399,4 @@ function ExpandedDetail({ result, lc }) {
     </div>
   )
 }
+

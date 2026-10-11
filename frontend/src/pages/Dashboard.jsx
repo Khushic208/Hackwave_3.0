@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import RiskBadge from '../components/RiskBadge'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 const RISK_COLORS = { 'High Risk': '#ef4444', 'Medium Risk': '#f59e0b', 'Low Risk': '#22c55e' }
 const CONFIDENCE_COLORS = { High: 'text-green-400', Medium: 'text-yellow-400', Low: 'text-red-400' }
@@ -371,3 +371,4 @@ function RiskScore({ score, level }) {
     <span className={`font-bold text-xs ${color}`}>{score}</span>
   )
 }
+

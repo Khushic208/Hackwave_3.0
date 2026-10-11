@@ -3,7 +3,7 @@ import axios from 'axios'
 import { Search, Filter, ArrowUpRight, ArrowDownRight, ChevronRight, Users } from 'lucide-react'
 import RiskBadge from '../components/RiskBadge'
 
-const API = 'http://localhost:4000/api'
+const API = 'http://localhost:4001/api'
 
 export default function Customers({ onSelectCustomer }) {
   const [customers, setCustomers] = useState([])
@@ -149,3 +149,4 @@ export default function Customers({ onSelectCustomer }) {
     </div>
   )
 }
+

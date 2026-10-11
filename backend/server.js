@@ -12,7 +12,9 @@ app.use(cors())
 app.use(express.json())
 
 // ─── Groq LLM Client ──────────────────────────────────────────────────────────
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+const groq = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
+  ? new Groq({ apiKey: process.env.GROQ_API_KEY })
+  : null
 
 // ─── In-memory customer store (real input from user) ─────────────────────────
 let customers = []

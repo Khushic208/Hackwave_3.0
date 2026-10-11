@@ -4,6 +4,10 @@ const cors = require('cors')
 const Groq = require('groq-sdk')
 const { fetchHubSpotCustomers } = require('./integrations/hubspot')
 const { getEmailSignal, checkGmailConnected, sendGmailEmail } = require('./integrations/composio')
+const {
+  initializeDatabase, loadCustomers, saveCustomer, createApprovedTask,
+  loadTasks, createTask, updateTaskStatus, deleteCustomer
+} = require('./database')
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -16,7 +20,7 @@ const groq = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq
   ? new Groq({ apiKey: process.env.GROQ_API_KEY })
   : null
 
-// ─── In-memory customer store (real input from user) ─────────────────────────
+// ─── Customer cache (persisted in MySQL) ─────────────────────────────────────
 let customers = []
 let nextId = 1
 
@@ -441,6 +445,7 @@ app.post('/api/sync/hubspot', async (req, res) => {
         ]
       }
 
+      await saveCustomer(rec)
       if (existing >= 0) customers[existing] = rec
       else customers.push(rec)
 
@@ -522,6 +527,12 @@ app.post('/api/actions/send-email', async (req, res) => {
           { time: new Date().toLocaleString(), desc: `Email sent: "${subject}"`, by: 'Agent', type: 'Email' },
           ...(customer.recentActivity || [])
         ]
+        try {
+          await saveCustomer(customer)
+        } catch (err) {
+          console.error('Email was sent, but customer activity could not be saved to MySQL:', err.message)
+          return res.status(500).json({ error: 'Email was sent, but customer activity could not be saved to the database' })
+        }
       }
     }
     res.json({ success: true, message: `Email sent to ${to}` })
@@ -556,6 +567,12 @@ app.post('/api/integrate-and-analyze', async (req, res) => {
 
     const existing = customers.findIndex(c => c._crmId === ((sfMap[key]?.sfId) || (hsMap[key]?.hsId)))
     const rec = buildCustomerRecord(merged, riskResult, llmResult, llmError, sfMap[key], hsMap[key], existing >= 0 ? customers[existing].id : nextId++)
+    try {
+      await saveCustomer(rec)
+    } catch (err) {
+      console.error('Failed to save integrated customer to MySQL:', err.message)
+      return res.status(500).json({ error: 'Integrated customer could not be saved to the database' })
+    }
     if (existing >= 0) customers[existing] = rec; else customers.push(rec)
     results.push({ merged, riskResult, llmResult, llmError })
   }
@@ -572,6 +589,100 @@ app.get('/api/customers/:id', (req, res) => {
   const c = customers.find(c => c.id === parseInt(req.params.id))
   if (!c) return res.status(404).json({ error: 'Customer not found' })
   res.json(c)
+})
+
+// Approve or reject a customer action and persist the decision.
+app.post('/api/customers/:id/actions', async (req, res) => {
+  const customerIndex = customers.findIndex(c => c.id === parseInt(req.params.id))
+  const customer = customers[customerIndex]
+  if (!customer) return res.status(404).json({ error: 'Customer not found' })
+
+  const { action } = req.body
+  if (!['approve-task', 'approve-crm-update', 'reject'].includes(action)) {
+    return res.status(400).json({ error: 'A valid action is required' })
+  }
+
+  const updatedCustomer = {
+    ...customer,
+    _actions: { ...(customer._actions || {}) },
+    recentActivity: [...(customer.recentActivity || [])],
+  }
+  const actionKey = action === 'approve-task'
+    ? 'approveTask'
+    : action === 'approve-crm-update' ? 'approveCrmUpdate' : 'reject'
+  if (updatedCustomer._actions[actionKey]) {
+    return res.status(409).json({ error: 'This action has already been completed', customer })
+  }
+  if ((action === 'approve-crm-update' && updatedCustomer._actions.reject) ||
+      (action === 'reject' && updatedCustomer._actions.approveCrmUpdate)) {
+    return res.status(409).json({ error: 'The CRM update has already been approved or rejected', customer })
+  }
+
+  const now = new Date()
+  const time = now.toLocaleString()
+  const dueDate = getRelativeDate(customer.urgency === 'Immediate' ? 1 : customer.urgency === 'This Week' ? 5 : 14)
+  let taskId
+
+  if (action === 'approve-task') {
+    updatedCustomer._actions.approveTask = { status: 'approved', at: time, taskId: null }
+    updatedCustomer.recentActivity = [
+      { time, desc: 'Follow-up task approved and created', by: 'User', type: 'Task' },
+      ...updatedCustomer.recentActivity
+    ]
+    try {
+      taskId = await createApprovedTask(updatedCustomer, {
+        title: customer.nextAction || `Follow up with ${customer.name}`,
+        assignee: customer.owner || '',
+        dueDate,
+        priority: customer.riskLevel || 'Medium',
+      })
+    } catch (err) {
+      console.error('Failed to create approved customer task:', err.message)
+      return res.status(500).json({ error: 'The task could not be saved to the database' })
+    }
+  } else {
+    if (action === 'approve-crm-update') {
+      updatedCustomer._actions.approveCrmUpdate = { status: 'approved', at: time }
+      updatedCustomer.crmUpdate = {
+        status: `${customer.riskLevel || 'Unknown'} Risk`,
+        assignedTo: customer.owner || '',
+        dueDate,
+        nextAction: customer.nextAction || `Follow up with ${customer.name}`,
+        approvalStatus: 'Approved locally',
+        approvedAt: time,
+      }
+      updatedCustomer.crm = {
+        ...(customer.crm || {}),
+        lastAction: 'CRM update approved locally',
+        lastActionAt: time,
+      }
+    } else {
+      updatedCustomer._actions.reject = { status: 'rejected', at: time }
+      updatedCustomer.crmUpdate = {
+        ...(customer.crmUpdate || {}),
+        approvalStatus: 'Rejected',
+        rejectedAt: time,
+      }
+    }
+
+    const description = action === 'approve-crm-update'
+      ? 'Proposed CRM update approved and saved to the customer record'
+      : 'Proposed CRM update rejected'
+    updatedCustomer.recentActivity = [
+      { time, desc: description, by: 'User', type: 'Approval' },
+      ...updatedCustomer.recentActivity
+    ]
+
+    try {
+      await saveCustomer(updatedCustomer)
+    } catch (err) {
+      console.error('Failed to save customer action:', err.message)
+      return res.status(500).json({ error: 'The action could not be saved to the database' })
+    }
+  }
+
+  customers[customerIndex] = updatedCustomer
+  res.json({ customer: updatedCustomer, taskId })
 })
 
 // Add customer + run AI analysis immediately
@@ -646,6 +757,13 @@ app.post('/api/customers', async (req, res) => {
     ]
   }
 
+  try {
+    await saveCustomer(built)
+  } catch (err) {
+    console.error('Failed to save customer to MySQL:', err.message)
+    return res.status(500).json({ error: 'Customer could not be saved to the database' })
+  }
+
   if (existingIdx >= 0) {
     customers[existingIdx] = built
   } else {
@@ -689,6 +807,13 @@ app.post('/api/customers/:id/analyze', async (req, res) => {
     ]
   })
 
+  try {
+    await saveCustomer(customer)
+  } catch (err) {
+    console.error('Failed to save customer analysis to MySQL:', err.message)
+    return res.status(500).json({ error: 'Customer analysis could not be saved to the database' })
+  }
+
   res.json(customer)
 })
 
@@ -720,17 +845,29 @@ app.post('/api/analyze-risk-standalone', async (req, res) => {
 })
 
 // Update customer fields (CRM patch)
-app.patch('/api/customers/:id', (req, res) => {
+app.patch('/api/customers/:id', async (req, res) => {
   const customer = customers.find(c => c.id === parseInt(req.params.id))
   if (!customer) return res.status(404).json({ error: 'Customer not found' })
   Object.assign(customer, req.body)
+  try {
+    await saveCustomer(customer)
+  } catch (err) {
+    console.error('Failed to update customer in MySQL:', err.message)
+    return res.status(500).json({ error: 'Customer could not be updated in the database' })
+  }
   res.json(customer)
 })
 
 // Delete customer
-app.delete('/api/customers/:id', (req, res) => {
+app.delete('/api/customers/:id', async (req, res) => {
   const idx = customers.findIndex(c => c.id === parseInt(req.params.id))
   if (idx === -1) return res.status(404).json({ error: 'Customer not found' })
+  try {
+    await deleteCustomer(req.params.id)
+  } catch (err) {
+    console.error('Failed to delete customer from MySQL:', err.message)
+    return res.status(500).json({ error: 'Customer could not be deleted from the database' })
+  }
   customers.splice(idx, 1)
   res.json({ success: true })
 })
@@ -812,18 +949,67 @@ app.get('/api/opportunities', (req, res) => {
   res.json(opps)
 })
 
-// Tasks (auto-generated from AI recommendations)
-app.get('/api/tasks', (req, res) => {
-  const tasks = customers.map((c, i) => ({
-    id: i + 1,
-    title: c.nextAction || `Follow up with ${c.name}`,
-    customer: c.name,
-    dueDate: getRelativeDate(c.urgency === 'Immediate' ? 1 : c.urgency === 'This Week' ? 5 : 14),
-    priority: c.riskLevel,
-    status: 'Pending',
-    assignee: c.owner
-  }))
-  res.json(tasks)
+// Tasks
+app.get('/api/tasks', async (req, res) => {
+  try {
+    res.json(await loadTasks())
+  } catch (err) {
+    console.error('Failed to load tasks:', err.message)
+    res.status(500).json({ error: 'Tasks could not be loaded from the database' })
+  }
+})
+
+app.post('/api/tasks', async (req, res) => {
+  const { title, customer, assignee, dueDate, priority = 'Medium', status = 'Pending', customerId } = req.body
+  if (!title?.trim() || !customer?.trim() || !assignee?.trim() || !dueDate) {
+    return res.status(400).json({ error: 'title, customer, assignee, and dueDate are required' })
+  }
+  if (!['High', 'Medium', 'Low'].includes(priority)) {
+    return res.status(400).json({ error: 'priority must be High, Medium, or Low' })
+  }
+  if (!['Pending', 'In Progress'].includes(status)) {
+    return res.status(400).json({ error: 'status must be Pending or In Progress' })
+  }
+
+  try {
+    const task = {
+      id: await createTask({
+        title: title.trim(),
+        customer: customer.trim(),
+        assignee: assignee.trim(),
+        dueDate,
+        priority,
+        status,
+        customerId,
+      }),
+      customerId: customerId || null,
+      title: title.trim(),
+      customer: customer.trim(),
+      assignee: assignee.trim(),
+      dueDate,
+      priority,
+      status,
+    }
+    res.status(201).json(task)
+  } catch (err) {
+    console.error('Failed to create task:', err.message)
+    res.status(500).json({ error: 'Task could not be saved to the database' })
+  }
+})
+
+app.patch('/api/tasks/:id', async (req, res) => {
+  const { status } = req.body
+  if (!['Pending', 'In Progress', 'Completed'].includes(status)) {
+    return res.status(400).json({ error: 'A valid task status is required' })
+  }
+  try {
+    const updated = await updateTaskStatus(req.params.id, status)
+    if (!updated) return res.status(404).json({ error: 'Task not found' })
+    res.json({ success: true, status })
+  } catch (err) {
+    console.error('Failed to update task:', err.message)
+    res.status(500).json({ error: 'Task status could not be saved to the database' })
+  }
 })
 
 // Renewals
@@ -1325,27 +1511,45 @@ function seedDemoData() {
   console.log(`✅ Seeded ${seedCustomers.length} demo customers`)
 }
 
-// Auto-handle port in use — try next port
-const server = app.listen(PORT, () => {
-  const aiEnabled = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
-  console.log(`RevOps AI backend running on http://localhost:${PORT}`)
-  console.log(`AI Mode: ${aiEnabled ? '✅ Groq LLM enabled' : '⚠️  Fallback mode (add GROQ_API_KEY to .env)'}`)
-  seedDemoData()
-})
+async function startServer() {
+  try {
+    await initializeDatabase()
+    customers = await loadCustomers()
+    nextId = customers.reduce((maxId, customer) => Math.max(maxId, Number(customer.id) || 0), 0) + 1
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    const nextPort = PORT + 1
-    console.log(`⚠️  Port ${PORT} in use — trying port ${nextPort}...`)
-    server.close()
-    app.listen(nextPort, () => {
-      console.log(`RevOps AI backend running on http://localhost:${nextPort}`)
-      console.log(`⚠️  Update frontend API url to http://localhost:${nextPort} if needed`)
+    const shouldSeed = customers.length === 0
+    seedDemoData()
+    if (shouldSeed) await Promise.all(customers.map(saveCustomer))
+    else await Promise.all(customers.map(customer => saveCustomer(customer)))
+
+    const logStartup = (port, fallback = false) => {
       const aiEnabled = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
-      console.log(`AI Mode: ${aiEnabled ? '✅ Groq LLM enabled' : '⚠️  Fallback mode'}`)
-      seedDemoData()
+      console.log(`RevOps AI backend running on http://localhost:${port}`)
+      if (fallback) console.log(`⚠️  Update frontend API url to http://localhost:${port} if needed`)
+      console.log(`AI Mode: ${aiEnabled ? '✅ Groq LLM enabled' : '⚠️  Fallback mode (add GROQ_API_KEY to .env)'}`)
+    }
+
+    const server = app.listen(PORT, () => logStartup(PORT))
+    server.on('error', err => {
+      if (err.code !== 'EADDRINUSE') {
+        console.error('Backend server error:', err)
+        process.exitCode = 1
+        return
+      }
+
+      const nextPort = Number(PORT) + 1
+      console.log(`⚠️  Port ${PORT} in use — trying port ${nextPort}...`)
+      server.close()
+      const fallbackServer = app.listen(nextPort, () => logStartup(nextPort, true))
+      fallbackServer.on('error', fallbackError => {
+        console.error('Backend server error:', fallbackError)
+        process.exitCode = 1
+      })
     })
-  } else {
-    throw err
+  } catch (err) {
+    console.error('Failed to initialize MySQL. Check the database settings in backend/.env:', err.message)
+    process.exitCode = 1
   }
-})
+}
+
+startServer()

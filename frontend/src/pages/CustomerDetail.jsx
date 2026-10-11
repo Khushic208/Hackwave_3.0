@@ -20,6 +20,8 @@ export default function CustomerDetail({ customerId, onBack }) {
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [actionStatus, setActionStatus] = useState(null)
+  const [actionLoading, setActionLoading] = useState(false)
+  const [actionError, setActionError] = useState('')
 
   useEffect(() => {
     if (!customerId) return
@@ -34,6 +36,27 @@ export default function CustomerDetail({ customerId, onBack }) {
       navigator.clipboard.writeText(customer.emailDraft)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  const handleCustomerAction = async action => {
+    setActionLoading(true)
+    setActionError('')
+    try {
+      const response = await axios.post(`${API}/customers/${customerId}/actions`, { action })
+      setCustomer(response.data.customer)
+      setActionStatus({
+        message: action === 'approve-task'
+          ? 'Task approved and added to Tasks & Renewals'
+          : action === 'approve-crm-update'
+            ? 'CRM update approved and saved to this customer record'
+            : 'Proposed CRM update rejected',
+        rejected: action === 'reject',
+      })
+    } catch (err) {
+      setActionError(err.response?.data?.error || 'Action failed. Check that the backend and database are running.')
+    } finally {
+      setActionLoading(false)
     }
   }
 
@@ -95,7 +118,15 @@ export default function CustomerDetail({ customerId, onBack }) {
       {tab === 'Overview' && <OverviewTab customer={customer} riskColor={riskColor} gaugeData={gaugeData} />}
       {tab === 'Signals' && <SignalsTab customer={customer} />}
       {tab === 'AI Analysis' && <AIAnalysisTab customer={customer} onCopyEmail={handleCopyEmail} copied={copied} />}
-      {tab === 'Actions' && <ActionsTab customer={customer} actionStatus={actionStatus} setActionStatus={setActionStatus} />}
+      {tab === 'Actions' && (
+        <ActionsTab
+          customer={customer}
+          actionStatus={actionStatus}
+          actionError={actionError}
+          actionLoading={actionLoading}
+          onAction={handleCustomerAction}
+        />
+      )}
       {tab === 'History' && <HistoryTab customer={customer} />}
     </div>
   )
@@ -298,34 +329,40 @@ function AIAnalysisTab({ customer, onCopyEmail, copied }) {
 }
 
 // ─── Actions Tab ─────────────────────────────────────────────────────────────
-function ActionsTab({ customer, actionStatus, setActionStatus }) {
+function ActionsTab({ customer, actionStatus, actionError, actionLoading, onAction }) {
   const actions = [
-    { id: 'approve', label: 'Approve & Create Task', color: 'bg-green-600 hover:bg-green-700', icon: CheckCircle },
-    { id: 'crm', label: 'Approve CRM Update', color: 'bg-blue-600 hover:bg-blue-700', icon: Database },
-    { id: 'reject', label: 'Reject', color: 'bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-400', icon: XCircle },
+    { id: 'approve-task', stateKey: 'approveTask', label: 'Approve & Create Task', color: 'bg-green-600 hover:bg-green-700', icon: CheckCircle },
+    { id: 'approve-crm-update', stateKey: 'approveCrmUpdate', label: 'Approve CRM Update', color: 'bg-blue-600 hover:bg-blue-700', icon: Database },
+    { id: 'reject', stateKey: 'reject', label: 'Reject', color: 'bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-400', icon: XCircle },
   ]
 
   return (
     <div className="space-y-4">
       <div className="bg-[#112240] rounded-xl border border-[#1e2d3d] p-5">
         <h3 className="text-sm font-semibold text-white mb-4">Approval & Execution</h3>
-        {actionStatus ? (
-          <div className="flex items-center gap-2 text-sm text-green-400">
-            <CheckCircle size={15} />
-            Action completed: {actionStatus}
+        {actionStatus && (
+          <div className={`flex items-center gap-2 text-sm mb-3 ${actionStatus.rejected ? 'text-red-400' : 'text-green-400'}`}>
+            {actionStatus.rejected ? <XCircle size={15} /> : <CheckCircle size={15} />}
+            {actionStatus.message}
           </div>
-        ) : (
-          <p className="text-xs text-slate-400 mb-4">No normal action notes added without approval.</p>
+        )}
+        {actionError && (
+          <div role="alert" className="mb-3 text-sm text-red-400">{actionError}</div>
         )}
         <div className="flex items-center gap-3 flex-wrap">
           {actions.map(a => (
             <button
               key={a.id}
-              onClick={() => setActionStatus(a.label)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-all ${a.color}`}
+              onClick={() => onAction(a.id)}
+              disabled={actionLoading || Boolean(customer._actions?.[a.stateKey]) ||
+                (a.id === 'approve-crm-update' && Boolean(customer._actions?.reject)) ||
+                (a.id === 'reject' && Boolean(customer._actions?.approveCrmUpdate))}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed ${a.color}`}
             >
               <a.icon size={13} />
-              {a.label}
+              {customer._actions?.[a.stateKey]
+                ? a.id === 'reject' ? 'Rejected' : 'Approved'
+                : actionLoading ? 'Saving...' : a.label}
             </button>
           ))}
         </div>
@@ -338,17 +375,25 @@ function ActionsTab({ customer, actionStatus, setActionStatus }) {
         <div className="space-y-2 text-xs text-slate-300">
           <div className="flex items-center justify-between py-2 border-b border-[#1e2d3d]">
             <span className="text-slate-500">Status</span>
-            <span className="text-yellow-400">{customer.riskLevel} Risk</span>
+            <span className="text-yellow-400">{customer.crmUpdate?.status || `${customer.riskLevel} Risk`}</span>
           </div>
           <div className="flex items-center justify-between py-2 border-b border-[#1e2d3d]">
             <span className="text-slate-500">Assigned To</span>
-            <span className="text-white">{customer.owner}</span>
+            <span className="text-white">{customer.crmUpdate?.assignedTo || customer.owner}</span>
           </div>
           <div className="flex items-center justify-between py-2">
             <span className="text-slate-500">Due Date</span>
-            <span className="text-white">Apr 28, 2025</span>
+            <span className="text-white">{customer.crmUpdate?.dueDate || customer.renewal || 'Not set'}</span>
           </div>
         </div>
+        {customer.crmUpdate?.approvalStatus && (
+          <p className={`text-xs mt-3 ${customer.crmUpdate.approvalStatus === 'Rejected' ? 'text-red-400' : 'text-green-400'}`}>
+            {customer.crmUpdate.approvalStatus}
+          </p>
+        )}
+        <p className="text-[11px] text-slate-500 mt-3">
+          Approval is saved to this app and its database; no external CRM is connected for updates.
+        </p>
       </div>
     </div>
   )
@@ -401,4 +446,3 @@ function EngCard({ icon: Icon, color, label, value, warn }) {
     </div>
   )
 }
-

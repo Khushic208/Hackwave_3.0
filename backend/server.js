@@ -1100,9 +1100,125 @@ function seedDemoData() {
   console.log(`✅ Seeded ${seedCustomers.length} demo customers`)
 }
 
+// ─── Real Integrations ────────────────────────────────────────────────────────
+const { fetchHubSpotCustomers } = require('./integrations/hubspot')
+const { fetchGmailSignals, checkComposioStatus, sendEmailViaComposio } = require('./integrations/composio')
+
+// Fetch real HubSpot data + run AI analysis
+app.get('/api/hubspot/sync', async (req, res) => {
+  try {
+    if (!process.env.HUBSPOT_API_KEY) {
+      return res.status(400).json({ error: 'HUBSPOT_API_KEY not configured' })
+    }
+
+    const hsRecords = await fetchHubSpotCustomers()
+
+    if (hsRecords.length === 0) {
+      return res.json({ total: 0, message: 'No companies found in HubSpot. Add contacts/companies first.' })
+    }
+
+    // For each HS record, optionally enrich with Gmail signals from Composio
+    const composioStatus = await checkComposioStatus()
+    const enriched = []
+
+    for (const record of hsRecords) {
+      let gmailSignals = { lastEmailDays: null, unansweredEmails: 0, lastEmailSubject: null }
+
+      if (composioStatus.connected && record.contactEmail) {
+        gmailSignals = await fetchGmailSignals(record.name, record.contactEmail)
+      }
+
+      // Merge HubSpot + Gmail signals
+      const merged = {
+        name: record.name,
+        owner: record.owner,
+        industry: record.industry,
+        arr: record.arr,
+        source: composioStatus.connected ? 'HubSpot + Gmail (via Composio)' : 'HubSpot',
+        lastActivityDays: gmailSignals.lastEmailDays ?? record.lastEmailDays,
+        openOpportunities: 1,
+        crmStage: record.dealStage,
+        accountHealth: record.dealStage === 'Churn Risk' ? 'Critical' : record.dealStage === 'Renewal Risk' ? 'At Risk' : 'Healthy',
+        supportCases: 0,
+        usageDrop: record.usageScore >= 70 ? 10 : record.usageScore >= 40 ? -10 : -30,
+        contactName: record.contactName,
+        contactTitle: record.contactTitle,
+        contactReplied: record.contactReplied,
+        contactLastEmailDays: record.contactLastEmailDays,
+        daysToRenewal: record.daysToRenewal,
+        renewal: record.renewal,
+        emailOpens: record.emailOpens,
+        meetingBooked: record.meetingBooked,
+        dealStage: record.dealStage,
+        usageScore: record.usageScore,
+        npsScore: record.npsScore,
+        lastEmailDays: gmailSignals.lastEmailDays ?? record.lastEmailDays,
+        unansweredEmails: gmailSignals.unansweredEmails,
+        emailSummary: gmailSignals.lastEmailSubject
+          ? `Last email subject: "${gmailSignals.lastEmailSubject}"`
+          : null,
+      }
+
+      // Calculate risk score
+      const riskResult = calculateRiskScore(merged)
+
+      // LLM explanation
+      let llmResult, llmError
+      try {
+        llmResult = await explainWithLLM(merged, riskResult)
+      } catch (e) {
+        llmError = e.message
+        llmResult = fallbackLLMResult(merged, riskResult)
+      }
+
+      // Save to customer store
+      const existing = customers.findIndex(c => c._crmId === record.hsId)
+      const rec = buildCustomerRecord(merged, riskResult, llmResult, llmError, null, record, existing >= 0 ? customers[existing].id : nextId++)
+      if (existing >= 0) customers[existing] = rec; else customers.push(rec)
+
+      enriched.push({ name: record.name, riskScore: riskResult.score, riskLevel: riskResult.level, source: merged.source })
+    }
+
+    // Notify frontend to refresh
+    res.json({
+      total: enriched.length,
+      composioGmail: composioStatus.connected,
+      customers: enriched,
+      message: `Synced ${enriched.length} real customers from HubSpot${composioStatus.connected ? ' + Gmail' : ''}`
+    })
+  } catch (err) {
+    console.error('HubSpot sync error:', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Composio status check
+app.get('/api/composio/status', async (req, res) => {
+  try {
+    const status = await checkComposioStatus()
+    res.json(status)
+  } catch (err) {
+    res.json({ connected: false, error: err.message })
+  }
+})
+
+// Send email via Composio Gmail (human-approved action)
+app.post('/api/composio/send-email', async (req, res) => {
+  const { to, subject, body } = req.body
+  if (!to || !subject || !body) {
+    return res.status(400).json({ error: 'to, subject, and body required' })
+  }
+  const result = await sendEmailViaComposio(to, subject, body)
+  res.json(result)
+})
+
 app.listen(PORT, () => {
   const aiEnabled = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
+  const hsEnabled = !!process.env.HUBSPOT_API_KEY
+  const composioEnabled = !!process.env.COMPOSIO_API_KEY
   console.log(`RevOps AI backend running on http://localhost:${PORT}`)
-  console.log(`AI Mode: ${aiEnabled ? '✅ Groq LLM enabled' : '⚠️  Fallback mode (add GROQ_API_KEY to .env)'}`)
+  console.log(`AI Mode: ${aiEnabled ? '✅ Groq LLM enabled' : '⚠️  Fallback'}`)
+  console.log(`HubSpot: ${hsEnabled ? '✅ API key configured' : '⚠️  No key'}`)
+  console.log(`Composio: ${composioEnabled ? '✅ API key configured' : '⚠️  No key'}`)
   seedDemoData()
 })

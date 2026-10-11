@@ -30,9 +30,7 @@ export default function App() {
 
   const handlePageChange = (page) => {
     setActivePage(page)
-    if (page !== 'overview' && page !== 'customers' && page !== 'customer360') {
-      setSelectedCustomerId(null)
-    }
+    setSelectedCustomerId(null)
   }
 
   const showDetailPanel = (activePage === 'overview' || activePage === 'customers') && selectedCustomerId
@@ -55,11 +53,11 @@ export default function App() {
   return (
     <div className={`app-shell flex h-screen overflow-hidden bg-slate-50 ${darkMode ? 'dark' : ''}`}>
       <Sidebar activePage={activePage} setActivePage={handlePageChange} />
-      <div className="flex flex-col flex-1 overflow-hidden min-w-0">
+      <div className="app-workspace flex flex-col flex-1 overflow-hidden min-w-0">
         <Header darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />
         <div className="flex flex-1 overflow-hidden">
           {/* Main Content */}
-          <main className={`page-${activePage} flex-1 overflow-auto px-8 py-7 transition-all duration-300 ${showDetailPanel ? 'max-w-[60%]' : ''}`}>
+          <main key={activePage} className={`page-${activePage} flex-1 overflow-auto px-8 py-7 transition-all duration-300 ${showDetailPanel ? 'max-w-[60%]' : ''}`}>
             {renderPage()}
           </main>
 

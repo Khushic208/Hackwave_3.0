@@ -91,7 +91,7 @@ export default function RiskOpportunities() {
       {/* High Risk Accounts Table */}
       <div className="bg-[#112240] rounded-xl border border-[#1e2d3d] overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#1e2d3d]">
-          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <h3 className="text-base font-semibold text-white flex items-center gap-2">
             <AlertTriangle size={15} className="text-red-400" /> High Risk Accounts
           </h3>
           <span className="text-xs text-slate-500">{highRisk.length} accounts</span>
@@ -169,7 +169,7 @@ export default function RiskOpportunities() {
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
             <TrendingUp size={15} className="text-green-400" /> Expansion Opportunities
           </h3>
-          <span className="text-xs text-slate-500">{expansionCandidates.length} accounts</span>
+          <span className="text-sm text-slate-600">{expansionCandidates.length} accounts</span>
         </div>
 
         {expansionCandidates.length === 0 ? (

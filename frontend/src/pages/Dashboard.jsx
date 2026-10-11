@@ -92,10 +92,10 @@ export default function Dashboard({ onSelectCustomer }) {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={Users} iconBg="bg-blue-600" title="Total Accounts" value={stats.totalAccounts} change={stats.totalAccountsChange} up subtitle="vs. last 30 days" />
-        <StatCard icon={ShieldAlert} iconBg="bg-red-600" title="High Risk" value={stats.highRisk} change={stats.highRiskChange} up={false} subtitle="needs attention" />
-        <StatCard icon={DollarSign} iconBg="bg-orange-500" title="Revenue at Risk" value={stats.revenueAtRisk} change={stats.revenueAtRiskChange} up={false} subtitle="from high risk accounts" />
-        <StatCard icon={Calendar} iconBg="bg-purple-600" title="Renewals in 30 Days" value={stats.renewalsIn30Days} subtitle="upcoming" extra={`${stats.pendingApprovals} pending approvals`} />
+        <StatCard icon={Users} iconBg="bg-blue-600" title="Total Accounts" value={stats.totalAccounts} change={stats.totalAccountsChange} up subtitle="vs. last 30 days" progress={100} progressLabel="Accounts monitored" />
+        <StatCard icon={ShieldAlert} iconBg="bg-red-600" title="High Risk" value={stats.highRisk} change={stats.highRiskChange} up={false} subtitle="needs attention" progress={stats.totalAccounts ? (stats.highRisk / stats.totalAccounts) * 100 : 0} progressLabel="of total accounts" />
+        <StatCard icon={DollarSign} iconBg="bg-orange-500" title="Revenue at Risk" value={stats.revenueAtRisk} change={stats.revenueAtRiskChange} up={false} subtitle="from high risk accounts" progress={stats.highRisk ? 75 : 0} progressLabel="exposure requiring review" />
+        <StatCard icon={Calendar} iconBg="bg-purple-600" title="Renewals in 30 Days" value={stats.renewalsIn30Days} subtitle="upcoming" extra={`${stats.pendingApprovals} pending approvals`} progress={stats.totalAccounts ? (stats.renewalsIn30Days / stats.totalAccounts) * 100 : 0} progressLabel="of total accounts" />
       </div>
 
       {/* Charts Row */}
@@ -337,9 +337,9 @@ export default function Dashboard({ onSelectCustomer }) {
   )
 }
 
-function StatCard({ icon: Icon, iconBg, title, value, change, up, subtitle, extra }) {
+function StatCard({ icon: Icon, iconBg, title, value, change, up, subtitle, extra, progress, progressLabel }) {
   return (
-    <div className="bg-[#112240] rounded-xl p-4 border border-[#1e2d3d] hover:border-blue-500/40 transition-colors">
+    <div className="dashboard-stat-card bg-[#112240] rounded-xl p-4 border border-[#1e2d3d] hover:border-blue-500/40 transition-colors">
       <div className="flex items-start justify-between mb-2">
         <div className={`w-9 h-9 ${iconBg} rounded-lg flex items-center justify-center`}>
           <Icon size={16} className="text-white" />
@@ -355,6 +355,12 @@ function StatCard({ icon: Icon, iconBg, title, value, change, up, subtitle, extr
       <div className="text-xs text-slate-400 mt-0.5">{title}</div>
       {subtitle && <div className="text-[11px] text-slate-500 mt-0.5">{subtitle}</div>}
       {extra && <div className="text-[11px] text-slate-500 mt-0.5">{extra}</div>}
+      <div className="dashboard-stat-detail">
+        <div className="dashboard-stat-track">
+          <span style={{ width: `${Math.min(Math.max(progress || 0, 0), 100)}%` }} />
+        </div>
+        <span>{progressLabel}</span>
+      </div>
     </div>
   )
 }

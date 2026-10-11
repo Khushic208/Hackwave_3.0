@@ -24,22 +24,17 @@ button, input { font: inherit; }
   font-weight: 500;
 }
 
-.header-context-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #14b8a6;
-  box-shadow: 0 0 0 4px #ccfbf1;
-}
-
-.header-context-status {
-  padding: 3px 8px;
-  border: 1px solid #bbf7d0;
-  border-radius: 999px;
-  color: #15803d;
-  background: #f0fdf4;
+.header-context-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #4f46e5, #7c3aed);
+  color: #ffffff;
   font-size: 0.72rem;
-  font-weight: 500;
+  font-weight: 700;
+  box-shadow: 0 0 0 4px #eef2ff;
 }
 
 .sidebar-nav-item {
@@ -57,6 +52,91 @@ button, input { font: inherit; }
 
 .sidebar-badge {
   font-weight: 600;
+}
+
+.sidebar-logo-mark {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.app-sidebar {
+  width: 256px;
+  transition: width 220ms ease;
+  overflow: hidden;
+  z-index: 10;
+}
+
+.app-sidebar-brand {
+  width: 256px;
+  min-width: 256px;
+  min-height: 88px;
+  justify-content: flex-start;
+}
+
+.app-sidebar-brand-copy,
+.app-sidebar-label,
+.app-sidebar-footer {
+  display: block;
+  opacity: 1;
+  pointer-events: auto;
+  white-space: nowrap;
+  transition: opacity 140ms ease;
+}
+
+.app-sidebar-nav {
+  width: 232px;
+  min-width: 232px;
+  justify-content: flex-start;
+}
+
+.app-sidebar-nav .sidebar-badge {
+  display: inline-block;
+  opacity: 1;
+}
+
+/* Keep the rail compact only while the user is working in the main area. */
+.app-shell:has(.app-workspace:hover) .app-sidebar {
+  width: 76px;
+  box-shadow: none;
+}
+
+.app-shell:has(.app-workspace:hover) .app-sidebar-brand {
+  width: 76px;
+  min-width: 76px;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  justify-content: center;
+}
+
+.app-shell:has(.app-workspace:hover) .app-sidebar-brand-copy,
+.app-shell:has(.app-workspace:hover) .app-sidebar-label,
+.app-shell:has(.app-workspace:hover) .app-sidebar-footer {
+  display: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-shell:has(.app-workspace:hover) .app-sidebar-nav {
+  width: 76px;
+  min-width: 76px;
+  justify-content: center;
+}
+
+.app-shell:has(.app-workspace:hover) .app-sidebar-nav .sidebar-badge {
+  display: none;
+  opacity: 0;
+}
+
+@media (max-width: 900px) {
+  .app-sidebar { width: 64px; }
+  .app-sidebar-brand { width: 64px; min-width: 64px; padding-left: 0.5rem; padding-right: 0.5rem; }
+  .app-sidebar-brand-copy,
+  .app-sidebar-label,
+  .app-sidebar-footer,
+  .app-sidebar-nav .sidebar-badge { display: none; }
+  .app-sidebar-nav { width: 64px; min-width: 64px; justify-content: center; }
 }
 
 main { font-size: 16px; }
@@ -111,9 +191,9 @@ main table [class~="text-white"] {
 }
 
 .expansion-opportunity-text {
-  color: #15803d;
-  font-size: 0.98rem;
-  font-weight: 400;
+  color: #1e3a8a;
+  font-size: 1.04rem;
+  font-weight: 500;
   line-height: 1.4;
 }
 
@@ -126,7 +206,7 @@ main table [class~="text-white"] {
 }
 
 .page-risk {
-  background: radial-gradient(circle at 92% 0%, rgb(254 226 226 / 0.65), transparent 28%);
+  background: #f8fafc;
 }
 
 .page-signals {
@@ -432,14 +512,7 @@ main table [class~="text-white"] {
 }
 
 .risk-metric-card::after {
-  position: absolute;
-  content: '';
-  width: 115px;
-  height: 115px;
-  top: -48px;
-  right: -30px;
-  border-radius: 50%;
-  opacity: 0.12;
+  display: none;
 }
 
 .risk-metric-card:hover {
@@ -447,10 +520,7 @@ main table [class~="text-white"] {
   box-shadow: 0 14px 32px rgb(15 23 42 / 0.09);
 }
 
-.risk-card-danger::after { background: #f43f5e; }
-.risk-card-revenue::after { background: #f97316; }
-.risk-card-score::after { background: #eab308; }
-.risk-card-renewal::after { background: #8b5cf6; }
+
 
 .risk-metric-top {
   display: flex;
@@ -591,17 +661,55 @@ main table [class~="text-white"] {
 }
 
 .app-shell.dark .header-context { color: #e2e8f0; }
-.app-shell.dark .header-context-dot {
-  background: #2dd4bf;
-  box-shadow: 0 0 0 4px #123b42;
-}
-.app-shell.dark .header-context-status {
-  border-color: #14532d;
-  color: #86efac;
-  background: #10291d;
-}
+.app-shell.dark .header-context-icon { box-shadow: 0 0 0 4px #27345a; }
 .app-shell.dark .sidebar-nav-item { color: #dbeafe !important; }
 .app-shell.dark .sidebar-nav-item svg { color: #94a3b8; }
+
+.dashboard-stat-card {
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-stat-card > .text-2xl {
+  font-size: 2rem !important;
+}
+
+.dashboard-stat-card > .text-xs {
+  font-size: 0.98rem !important;
+}
+
+.dashboard-stat-card > .text-\[11px\] {
+  font-size: 0.88rem !important;
+}
+
+.dashboard-stat-detail {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: auto;
+  padding-top: 18px;
+  color: #64748b;
+  font-size: 0.82rem;
+}
+
+.dashboard-stat-track {
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.dashboard-stat-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6366f1, #22c55e);
+}
+
+.app-shell.dark .dashboard-stat-detail { color: #94a3b8; }
+.app-shell.dark .dashboard-stat-track { background: #263654; }
 
 .app-shell.dark main {
   background-color: transparent;
@@ -609,7 +717,7 @@ main table [class~="text-white"] {
 
 .app-shell.dark .page-overview { background: radial-gradient(circle at 92% 0%, rgb(49 46 129 / 0.22), transparent 30%); }
 .app-shell.dark .page-customers { background: radial-gradient(circle at 92% 0%, rgb(30 64 175 / 0.2), transparent 28%); }
-.app-shell.dark .page-risk { background: radial-gradient(circle at 92% 0%, rgb(127 29 29 / 0.2), transparent 28%); }
+.app-shell.dark .page-risk { background: #0f172a; }
 .app-shell.dark .page-signals { background: radial-gradient(circle at 92% 0%, rgb(19 78 74 / 0.2), transparent 28%); }
 .app-shell.dark .signals-page-icon { color: #5eead4; background: #123b42; }
 .app-shell.dark .signal-step {
@@ -699,7 +807,7 @@ main table [class~="text-white"] {
 .app-shell.dark [class~="text-green-300"] {
   color: #86efac !important;
 }
-.app-shell.dark .expansion-opportunity-text { color: #86efac; }
+.app-shell.dark .expansion-opportunity-text { color: #bfdbfe; }
 .app-shell.dark [class~="text-slate-600"],
 .app-shell.dark [class~="text-slate-500"],
 .app-shell.dark [class~="text-slate-400"] { color: #94a3b8 !important; }

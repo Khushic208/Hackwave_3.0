@@ -238,8 +238,10 @@ function CustomerResultCard({ result, expanded, onToggle }) {
             {result.company && result.company !== result.name && (
               <span className="text-[10px] text-slate-500 bg-[#1a2942] px-2 py-0.5 rounded-full border border-[#1e2d3d]">{result.company}</span>
             )}
-            <span className="text-[10px] text-teal-700 flex items-center gap-0.5">
-              <Database size={8}/> Live data
+            <span className={`text-[10px] flex items-center gap-0.5 ${
+              result.source === 'Local demo data' ? 'text-slate-500' : 'text-teal-700'
+            }`}>
+              <Database size={8}/> {result.source === 'Local demo data' ? 'Demo data' : 'Live data'}
             </span>
           </div>
           <div className="text-xs text-slate-400 mt-0.5">

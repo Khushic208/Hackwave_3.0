@@ -6,9 +6,8 @@ export default function Header({ darkMode, onToggleDarkMode }) {
     <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center flex-shrink-0">
       <div>
         <div className="header-context">
-          <span className="header-context-dot" />
+          <span className="header-context-icon">R</span>
           <span>Revenue workspace</span>
-          <span className="header-context-status">Live</span>
         </div>
       </div>
       <div className="flex items-center gap-3 ml-auto">

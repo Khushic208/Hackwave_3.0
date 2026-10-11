@@ -17,11 +17,11 @@ const navItems = [
 
 export default function Sidebar({ activePage, setActivePage }) {
   return (
-    <div className="w-64 bg-white flex flex-col h-full border-r border-slate-200 flex-shrink-0">
+    <div className="app-sidebar bg-white flex flex-col h-full border-r border-slate-200 flex-shrink-0">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-200">
-        <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center font-bold text-white text-lg shadow-sm">R</div>
-        <div>
+      <div className="app-sidebar-brand flex items-center gap-3 px-5 py-5 border-b border-slate-200">
+        <img className="sidebar-logo-mark" src="/revops-ai-mark.svg" alt="RevOps AI logo" />
+        <div className="app-sidebar-brand-copy">
           <div className="font-bold text-slate-900 text-base tracking-tight">RevOps AI</div>
           <div className="text-xs text-slate-500">Autonomous RevOps Agent</div>
         </div>
@@ -33,14 +33,15 @@ export default function Sidebar({ activePage, setActivePage }) {
           <button
             key={id}
             onClick={() => setActivePage(id)}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
+            title={label}
+            className={`app-sidebar-nav w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
               activePage === id
                 ? 'bg-indigo-50 text-indigo-700 font-semibold'
                 : 'sidebar-nav-item text-slate-500 hover:bg-slate-50 hover:text-slate-900'
             }`}
           >
             <Icon size={16} />
-            <span className="flex-1 text-left">{label}</span>
+            <span className="app-sidebar-label flex-1 text-left">{label}</span>
             {badge && (
               <span className="sidebar-badge bg-indigo-100 text-indigo-700 text-xs rounded-full px-1.5 py-0.5 leading-none">
                 {badge}
@@ -51,7 +52,7 @@ export default function Sidebar({ activePage, setActivePage }) {
       </nav>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-slate-200">
+      <div className="app-sidebar-footer px-5 py-4 border-t border-slate-200">
         <div className="text-xs text-slate-400 leading-relaxed">
           <div className="font-medium text-slate-500 mb-1">Built for better decisions.</div>
           <div>Clear signals. Faster action.</div>

@@ -1,239 +1,252 @@
-// Real HubSpot CRM Integration
-// Fetches contacts, companies, deals, engagements using HubSpot Private App API
-
 const axios = require('axios')
 
 const HS_BASE = 'https://api.hubapi.com'
+const TOKEN = process.env.HUBSPOT_API_KEY
 
-function hsClient() {
-  return axios.create({
-    baseURL: HS_BASE,
-    headers: {
-      Authorization: `Bearer ${process.env.HUBSPOT_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    timeout: 10000,
-  })
-}
+const hs = axios.create({
+  baseURL: HS_BASE,
+  headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+  timeout: 15000,
+})
 
-// ─── Fetch all companies ──────────────────────────────────────────────────────
-async function fetchCompanies() {
-  const client = hsClient()
-  const res = await client.get('/crm/v3/objects/companies', {
-    params: {
-      limit: 50,
-      properties: [
-        'name', 'domain', 'industry', 'annualrevenue',
-        'hubspot_owner_id', 'hs_lastmodifieddate',
-        'lifecyclestage', 'hs_lead_status', 'numberofemployees'
-      ].join(','),
-    }
-  })
-  return res.data.results || []
-}
-
-// ─── Fetch all contacts ───────────────────────────────────────────────────────
+// ─── Fetch contacts with all key CRM properties ───────────────────────────────
 async function fetchContacts() {
-  const client = hsClient()
-  const res = await client.get('/crm/v3/objects/contacts', {
-    params: {
-      limit: 100,
-      properties: [
-        'firstname', 'lastname', 'email', 'company',
-        'jobtitle', 'hs_email_last_replied', 'notes_last_contacted',
-        'num_contacted_notes', 'hs_email_open', 'associatedcompanyid'
-      ].join(','),
-    }
-  })
-  return res.data.results || []
+  const props = [
+    'firstname', 'lastname', 'email', 'company',
+    'jobtitle', 'phone',
+    'hs_lead_status', 'lifecyclestage',
+    'hs_last_email_date', 'hs_email_open', 'hs_email_replied',
+    'hs_sales_email_last_replied', 'hs_email_last_send_date',
+    'notes_last_updated', 'notes_last_contacted',
+    'num_associated_deals', 'associatedcompanyid',
+    'hubspot_owner_id',
+    'hs_email_optout',
+  ].join(',')
+
+  let all = [], after
+  do {
+    const params = { limit: 100, properties: props }
+    if (after) params.after = after
+    const res = await hs.get('/crm/v3/objects/contacts', { params })
+    all = all.concat(res.data.results || [])
+    after = res.data.paging?.next?.after
+  } while (after)
+
+  return all
 }
 
-// ─── Fetch all deals ──────────────────────────────────────────────────────────
+// ─── Fetch deals for ARR + renewal date + stage ───────────────────────────────
 async function fetchDeals() {
-  const client = hsClient()
-  const res = await client.get('/crm/v3/objects/deals', {
-    params: {
-      limit: 100,
-      properties: [
-        'dealname', 'dealstage', 'amount', 'closedate',
-        'hubspot_owner_id', 'hs_deal_stage_probability',
-        'associated_company', 'hs_lastmodifieddate'
-      ].join(','),
-    }
-  })
-  return res.data.results || []
+  const props = [
+    'dealname', 'dealstage', 'amount', 'closedate',
+    'pipeline', 'hubspot_owner_id',
+    'hs_lastmodifieddate', 'notes_last_updated',
+    'hs_deal_stage_probability',
+  ].join(',')
+
+  let all = [], after
+  do {
+    const params = { limit: 100, properties: props }
+    if (after) params.after = after
+    const res = await hs.get('/crm/v3/objects/deals', { params })
+    all = all.concat(res.data.results || [])
+    after = res.data.paging?.next?.after
+  } while (after)
+
+  return all
 }
 
-// ─── Fetch owners (account managers) ─────────────────────────────────────────
-async function fetchOwners() {
-  const client = hsClient()
-  const res = await client.get('/crm/v3/owners', { params: { limit: 100 } })
-  const ownerMap = {}
-  ;(res.data.results || []).forEach(o => {
-    ownerMap[o.id] = `${o.firstName || ''} ${o.lastName || ''}`.trim() || o.email
-  })
-  return ownerMap
-}
-
-// ─── Fetch engagements (emails, calls, meetings) for a company ───────────────
-async function fetchEngagementsForCompany(companyId) {
-  const client = hsClient()
+// ─── Fetch support tickets ─────────────────────────────────────────────────────
+async function fetchTickets() {
   try {
-    // Get associated contacts first
-    const assocRes = await client.get(`/crm/v3/objects/companies/${companyId}/associations/contacts`)
-    const contactIds = (assocRes.data.results || []).map(r => r.id)
-    if (contactIds.length === 0) return { lastEmailDays: null, emailOpens: 0, lastMeetingDays: null }
-
-    // Get engagements for first contact
-    const engRes = await client.get('/crm/v3/objects/engagements', {
+    const res = await hs.get('/crm/v3/objects/tickets', {
       params: {
-        limit: 20,
-        properties: 'hs_engagement_type,hs_createdate,hs_email_subject',
-        filterGroups: JSON.stringify([{
-          filters: [{ propertyName: 'associations.contact', operator: 'EQ', value: contactIds[0] }]
-        }])
-      }
+        limit: 100,
+        properties: 'subject,hs_pipeline_stage,hs_ticket_priority,hs_object_id',
+      },
     })
-    const engs = engRes.data.results || []
-
-    const emails = engs.filter(e => e.properties?.hs_engagement_type === 'EMAIL')
-    const meetings = engs.filter(e => e.properties?.hs_engagement_type === 'MEETING')
-    const now = Date.now()
-
-    const lastEmailDate = emails.length > 0
-      ? Math.max(...emails.map(e => new Date(e.properties.hs_createdate).getTime()))
-      : null
-    const lastMeetingDate = meetings.length > 0
-      ? Math.max(...meetings.map(e => new Date(e.properties.hs_createdate).getTime()))
-      : null
-
-    return {
-      lastEmailDays: lastEmailDate ? Math.floor((now - lastEmailDate) / 86400000) : null,
-      emailOpens: emails.length,
-      lastMeetingDays: lastMeetingDate ? Math.floor((now - lastMeetingDate) / 86400000) : null,
-    }
-  } catch {
-    return { lastEmailDays: null, emailOpens: 0, lastMeetingDays: null }
-  }
+    return res.data.results || []
+  } catch { return [] }
 }
 
-// ─── MAIN: Build unified customer records from HubSpot ───────────────────────
-async function fetchHubSpotCustomers() {
-  console.log('🔄 Fetching real HubSpot data...')
+// ─── Fetch owners ─────────────────────────────────────────────────────────────
+async function fetchOwners() {
+  try {
+    const res = await hs.get('/crm/v3/owners/')
+    return res.data.results || []
+  } catch { return [] }
+}
 
-  const [companies, contacts, deals, owners] = await Promise.all([
-    fetchCompanies(),
+// ─── Associate deals with contacts ────────────────────────────────────────────
+async function fetchDealContactAssociations(dealIds) {
+  const map = {}
+  for (const id of dealIds.slice(0, 50)) {
+    try {
+      const res = await hs.get(`/crm/v3/objects/deals/${id}/associations/contacts`)
+      const contactId = res.data.results?.[0]?.id
+      if (contactId) map[contactId] = id
+    } catch { /* skip */ }
+  }
+  return map
+}
+
+// ─── MAIN: Build customer-level risk-ready records from real HubSpot data ─────
+async function fetchHubSpotCustomers() {
+  console.log('🔄 Fetching real HubSpot customer data...')
+
+  const [contacts, deals, tickets, owners] = await Promise.all([
     fetchContacts(),
     fetchDeals(),
+    fetchTickets(),
     fetchOwners(),
   ])
 
-  // Build contact map by associatedcompanyid
-  const contactsByCompany = {}
-  contacts.forEach(c => {
-    const compId = c.properties?.associatedcompanyid
-    if (compId) {
-      if (!contactsByCompany[compId]) contactsByCompany[compId] = []
-      contactsByCompany[compId].push(c)
-    }
+  // Owner lookup
+  const ownerMap = {}
+  owners.forEach(o => {
+    ownerMap[o.id] = `${o.firstName || ''} ${o.lastName || ''}`.trim() || o.email || 'Account Manager'
   })
 
-  // Build deal map by company name
-  const dealsByCompany = {}
-  deals.forEach(d => {
-    const name = d.properties?.dealname?.toLowerCase() || ''
-    dealsByCompany[name] = d
+  // Map deals by id
+  const dealMap = {}
+  deals.forEach(d => { dealMap[d.id] = d.properties })
+
+  // Associate deals → contacts
+  const dealIds = deals.map(d => d.id)
+  const dealContactMap = await fetchDealContactAssociations(dealIds)
+  // Invert: contactId → dealId
+  const contactDealMap = {}
+  Object.entries(dealContactMap).forEach(([contactId, dealId]) => {
+    contactDealMap[contactId] = dealId
   })
 
-  const results = []
+  // Count tickets (approximate — HubSpot free doesn't always associate tickets to contacts)
+  const totalTickets = tickets.length
 
-  for (const company of companies.slice(0, 15)) {
-    const p = company.properties
-    if (!p?.name) continue
-
-    const companyId = company.id
-    const companyContacts = contactsByCompany[companyId] || []
-    const primaryContact = companyContacts[0]?.properties
-
-    // Deal info
-    const companyNameKey = p.name.toLowerCase()
-    const matchedDeal = Object.keys(dealsByCompany).find(k => k.includes(companyNameKey) || companyNameKey.includes(k))
-    const deal = matchedDeal ? dealsByCompany[matchedDeal] : null
-
-    // Engagement data
-    const eng = await fetchEngagementsForCompany(companyId)
-
-    // Calculate days since last contact
-    const lastContactedStr = primaryContact?.notes_last_contacted
-    const lastContactedDays = lastContactedStr
-      ? Math.floor((Date.now() - new Date(lastContactedStr).getTime()) / 86400000)
-      : eng.lastEmailDays ?? 30
-
-    // Email replied check
-    const lastReplied = primaryContact?.hs_email_last_replied
-    const daysSinceReply = lastReplied
-      ? Math.floor((Date.now() - new Date(lastReplied).getTime()) / 86400000)
-      : null
-    const contactReplied = daysSinceReply !== null && daysSinceReply < 14
-
-    // Deal stage mapping
-    const dealStageRaw = deal?.properties?.dealstage || p.lifecyclestage || 'unknown'
-    const dealStageMap = {
-      'appointmentscheduled': 'Active',
-      'qualifiedtobuy': 'Active',
-      'presentationscheduled': 'Active',
-      'decisionmakerboughtin': 'Renewal',
-      'contractsent': 'Renewal',
-      'closedwon': 'Active',
-      'closedlost': 'Churn Risk',
-      'customer': 'Active',
-      'evangelist': 'Expansion',
-      'lead': 'Renewal Risk',
-      'subscriber': 'Renewal Risk',
-    }
-    const dealStage = dealStageMap[dealStageRaw?.toLowerCase()] || 'Active'
-
-    // Close date → days to renewal
-    const closeDate = deal?.properties?.closedate
-    const daysToRenewal = closeDate
-      ? Math.max(1, Math.floor((new Date(closeDate).getTime() - Date.now()) / 86400000))
-      : 90
-
-    // ARR from deal amount or company revenue
-    const arr = parseInt(deal?.properties?.amount) ||
-      parseInt(p.annualrevenue) || 0
-
-    // Owner
-    const ownerId = p.hubspot_owner_id || deal?.properties?.hubspot_owner_id
-    const ownerName = owners[ownerId] || 'Account Manager'
-
-    results.push({
-      hsId: `HS-${companyId}`,
-      name: p.name,
-      owner: ownerName,
-      industry: p.industry || 'Unknown',
-      arr,
-      daysToRenewal,
-      renewal: closeDate ? new Date(closeDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : `In ${daysToRenewal} days`,
-      lastEmailDays: eng.lastEmailDays ?? lastContactedDays,
-      emailOpens: eng.emailOpens,
-      meetingBooked: eng.lastMeetingDays !== null && eng.lastMeetingDays < 14,
-      dealStage,
-      // Use email opens as proxy for usage score (0-100)
-      usageScore: Math.min(100, (eng.emailOpens || 0) * 15 + (contactReplied ? 30 : 0)),
-      // NPS: derive from lifecycle stage
-      npsScore: dealStage === 'Expansion' ? 8 : dealStage === 'Churn Risk' ? 3 : dealStage === 'Active' ? 6 : 5,
-      // Contact info
-      contactName: primaryContact ? `${primaryContact.firstname || ''} ${primaryContact.lastname || ''}`.trim() : 'Unknown',
-      contactTitle: primaryContact?.jobtitle || '',
-      contactEmail: primaryContact?.email || '',
-      contactReplied,
-      contactLastEmailDays: daysSinceReply ?? lastContactedDays,
+  // Build one record per contact (if they have a name/company)
+  const records = contacts
+    .filter(c => {
+      const p = c.properties
+      return (p.firstname || p.lastname || p.company) // must have some identity
     })
-  }
+    .map(contact => {
+      const p = contact.properties
+      const contactId = contact.id
 
-  console.log(`✅ HubSpot: fetched ${results.length} real companies`)
-  return results
+      // Name
+      const firstName = p.firstname || ''
+      const lastName = p.lastname || ''
+      const fullName = `${firstName} ${lastName}`.trim() || p.company || 'Unknown'
+      const company = p.company || fullName
+
+      // Owner
+      const ownerName = ownerMap[p.hubspot_owner_id] || 'Account Manager'
+
+      // Deal for this contact
+      const dealId = contactDealMap[contactId]
+      const deal = dealId ? dealMap[dealId] : null
+
+      // ARR from deal amount
+      const arr = deal?.amount ? parseFloat(deal.amount) : 0
+
+      // Days to renewal from deal close date
+      let daysToRenewal = 90
+      let renewalDate = 'Not set'
+      if (deal?.closedate) {
+        const close = new Date(deal.closedate)
+        daysToRenewal = Math.max(1, Math.floor((close - Date.now()) / (1000 * 60 * 60 * 24)))
+        renewalDate = close.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      }
+
+      // Deal stage
+      const rawStage = deal?.dealstage || 'unknown'
+      const stageLabels = {
+        appointmentscheduled: 'Meeting Scheduled',
+        qualifiedtobuy: 'Qualified',
+        presentationscheduled: 'Presentation',
+        decisionmakerboughtin: 'Decision Maker',
+        contractsent: 'Contract Sent',
+        closedwon: 'Closed Won',
+        closedlost: 'Churn Risk',
+      }
+      const dealStage = stageLabels[rawStage] || rawStage.replace(/_/g, ' ')
+
+      // Email signals
+      const lastEmailDate = p.hs_last_email_date || p.hs_email_last_send_date || p.notes_last_contacted
+      const lastEmailDays = lastEmailDate
+        ? Math.floor((Date.now() - new Date(lastEmailDate)) / (1000 * 60 * 60 * 24))
+        : 999
+
+      const emailReplied = p.hs_email_replied === 'true' || !!p.hs_sales_email_last_replied
+      const emailOpens = parseInt(p.hs_email_open || '0', 10)
+
+      // Last activity
+      const lastActivity = p.notes_last_updated || p.notes_last_contacted
+      const lastActivityDays = lastActivity
+        ? Math.floor((Date.now() - new Date(lastActivity)) / (1000 * 60 * 60 * 24))
+        : lastEmailDays
+
+      // No next step = no deal or deal is stale
+      const noNextStep = !deal || rawStage === 'closedlost'
+
+      // Usage trend proxy from lifecycle stage
+      const lifecycle = p.lifecyclestage || ''
+      let usageTrend = 0
+      if (lifecycle === 'customer') usageTrend = 5
+      else if (lifecycle === 'evangelist') usageTrend = 15
+      else if (lifecycle === 'other') usageTrend = -10
+
+      // If deal lost, strong negative signal
+      if (rawStage === 'closedlost') usageTrend = -40
+
+      return {
+        // Identity
+        hsId: `HS-${contactId}`,
+        contactId,
+        name: fullName,          // customer person name
+        company,                  // company they work at
+        email: p.email || '',
+        jobTitle: p.jobtitle || '',
+        owner: ownerName,
+        industry: 'Unknown',      // HubSpot contacts don't always have industry
+
+        // Financial
+        arr,
+        daysToRenewal,
+        renewal: renewalDate,
+
+        // CRM signals
+        dealStage,
+        lifecycleStage: lifecycle,
+        noNextStep,
+        lastActivityDays,
+
+        // Email signals
+        lastEmailDays,
+        emailOpens,
+        emailReplied,
+        unansweredEmails: emailReplied ? 0 : (lastEmailDays > 7 ? 2 : lastEmailDays > 3 ? 1 : 0),
+
+        // Usage proxy
+        usageTrend,
+
+        // Support (approximate)
+        supportTickets: 0, // HubSpot free doesn't easily associate tickets to contacts
+
+        // Meta
+        _source: 'HubSpot Live',
+        _raw: true,
+      }
+    })
+
+  // Filter out contacts with no meaningful data
+  const meaningful = records.filter(r =>
+    r.name !== 'Unknown' &&
+    r.email !== ''
+  )
+
+  console.log(`✅ HubSpot: ${contacts.length} contacts → ${meaningful.length} customers with data`)
+  return meaningful
 }
 
 module.exports = { fetchHubSpotCustomers }

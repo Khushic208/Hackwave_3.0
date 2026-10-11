@@ -1325,27 +1325,25 @@ function seedDemoData() {
   console.log(`✅ Seeded ${seedCustomers.length} demo customers`)
 }
 
-// Auto-handle port in use — try next port
-const server = app.listen(PORT, () => {
-  const aiEnabled = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
-  console.log(`RevOps AI backend running on http://localhost:${PORT}`)
-  console.log(`AI Mode: ${aiEnabled ? '✅ Groq LLM enabled' : '⚠️  Fallback mode (add GROQ_API_KEY to .env)'}`)
-  seedDemoData()
-})
+// ─── Auto-find free port if preferred port is busy ───────────────────────────
+function startServer(port) {
+  const server = app.listen(port, () => {
+    const aiEnabled = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
+    console.log(`RevOps AI backend running on http://localhost:${port}`)
+    console.log(`AI Mode: ${aiEnabled ? '✅ Groq LLM enabled' : '⚠️  Fallback mode'}`)
+    // Write actual port to a temp file so frontend can read it
+    require('fs').writeFileSync('.port', String(port))
+    seedDemoData()
+  })
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    const nextPort = PORT + 1
-    console.log(`⚠️  Port ${PORT} in use — trying port ${nextPort}...`)
-    server.close()
-    app.listen(nextPort, () => {
-      console.log(`RevOps AI backend running on http://localhost:${nextPort}`)
-      console.log(`⚠️  Update frontend API url to http://localhost:${nextPort} if needed`)
-      const aiEnabled = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
-      console.log(`AI Mode: ${aiEnabled ? '✅ Groq LLM enabled' : '⚠️  Fallback mode'}`)
-      seedDemoData()
-    })
-  } else {
-    throw err
-  }
-})
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`⚠️  Port ${port} busy — trying ${port + 1}...`)
+      startServer(port + 1)
+    } else {
+      throw err
+    }
+  })
+}
+
+startServer(PORT)

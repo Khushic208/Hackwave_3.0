@@ -22,6 +22,9 @@ export default function TasksRenewals() {
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState(EMPTY_TASK)
   const [formError, setFormError] = useState('')
+  const [pageError, setPageError] = useState('')
+  const [savingTask, setSavingTask] = useState(false)
+  const [updatingTaskId, setUpdatingTaskId] = useState(null)
 
   useEffect(() => {
     Promise.all([
@@ -30,11 +33,22 @@ export default function TasksRenewals() {
     ]).then(([t, r]) => {
       setTasks(t.data)
       setRenewals(r.data)
+    }).catch(err => {
+      setPageError(err.response?.data?.error || 'Could not load tasks. Check that the backend and database are running.')
     }).finally(() => setLoading(false))
   }, [])
 
-  const completeTask = (id) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, status: 'Completed' } : t))
+  const completeTask = async id => {
+    setUpdatingTaskId(id)
+    setPageError('')
+    try {
+      await axios.patch(`${API}/tasks/${id}`, { status: 'Completed' })
+      setTasks(prev => prev.map(task => task.id === id ? { ...task, status: 'Completed' } : task))
+    } catch (err) {
+      setPageError(err.response?.data?.error || 'Could not complete this task.')
+    } finally {
+      setUpdatingTaskId(null)
+    }
   }
 
   const openModal = () => {
@@ -48,21 +62,29 @@ export default function TasksRenewals() {
     setFormError('')
   }
 
-  const handleAddTask = (e) => {
+  const handleAddTask = async e => {
     e.preventDefault()
     if (!form.title.trim()) { setFormError('Task title is required'); return }
     if (!form.customer.trim()) { setFormError('Customer name is required'); return }
     if (!form.assignee.trim()) { setFormError('Assignee is required'); return }
     if (!form.dueDate) { setFormError('Due date is required'); return }
 
-    const newTask = {
-      id: Date.now(),
-      ...form,
-      dueDate: new Date(form.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    setSavingTask(true)
+    setFormError('')
+    try {
+      const payload = {
+        ...form,
+        dueDate: new Date(`${form.dueDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      }
+      const response = await axios.post(`${API}/tasks`, payload)
+      setTasks(prev => [response.data, ...prev])
+      setShowModal(false)
+      setActiveTab('tasks')
+    } catch (err) {
+      setFormError(err.response?.data?.error || 'Could not save this task. Check that the backend and database are running.')
+    } finally {
+      setSavingTask(false)
     }
-    setTasks(prev => [newTask, ...prev])
-    setShowModal(false)
-    setActiveTab('tasks')
   }
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }))
@@ -87,6 +109,12 @@ export default function TasksRenewals() {
           <Plus size={14} /> Add Task
         </button>
       </div>
+
+      {pageError && (
+        <div role="alert" className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-300">
+          {pageError}
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -177,9 +205,10 @@ export default function TasksRenewals() {
                       {task.status !== 'Completed' && (
                         <button
                           onClick={() => completeTask(task.id)}
-                          className="text-xs text-green-400 hover:text-green-300 flex items-center gap-1 border border-green-500/30 px-2 py-1 rounded transition-colors"
+                          disabled={updatingTaskId === task.id}
+                          className="text-xs text-green-400 hover:text-green-300 disabled:opacity-50 flex items-center gap-1 border border-green-500/30 px-2 py-1 rounded transition-colors"
                         >
-                          <CheckCircle size={10} /> Done
+                          <CheckCircle size={10} /> {updatingTaskId === task.id ? 'Saving...' : 'Done'}
                         </button>
                       )}
                       {task.status === 'Completed' && (
@@ -351,9 +380,10 @@ export default function TasksRenewals() {
               <div className="flex items-center gap-3 pt-1">
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                  disabled={savingTask}
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                 >
-                  <CheckCircle size={14} /> Add Task
+                  <CheckCircle size={14} /> {savingTask ? 'Saving...' : 'Add Task'}
                 </button>
                 <button
                   type="button"
@@ -372,4 +402,3 @@ export default function TasksRenewals() {
 }
 
 const inputCls = 'w-full bg-[#0d1b2a] border border-[#1e2d3d] rounded-lg px-3 py-2 text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-blue-500 transition-colors'
-

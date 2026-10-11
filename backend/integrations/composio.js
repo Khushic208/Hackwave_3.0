@@ -1,105 +1,137 @@
-// Composio Integration — Gmail email signals via Composio toolset
-// Uses Composio to fetch recent Gmail threads for customer engagement signals
+const axios = require('axios')
 
-const { Composio } = require('@composio/core')
+// Composio new REST API base
+const COMPOSIO_BASE = 'https://api.composio.dev'
+const API_KEY = process.env.COMPOSIO_API_KEY
 
-let composioClient = null
+const composioClient = axios.create({
+  baseURL: COMPOSIO_BASE,
+  headers: {
+    'x-api-key': API_KEY,
+    'Content-Type': 'application/json',
+  },
+  timeout: 20000,
+})
 
-function getComposio() {
-  if (!composioClient) {
-    composioClient = new Composio({ apiKey: process.env.COMPOSIO_API_KEY })
-  }
-  return composioClient
-}
-
-// ─── Fetch Gmail signals for a company ───────────────────────────────────────
-async function fetchGmailSignals(companyName, contactEmail) {
+// ─── Check connected accounts (new API) ──────────────────────────────────────
+async function getConnectedAccounts() {
   try {
-    const composio = getComposio()
-
-    // Get Gmail toolset
-    const toolset = await composio.toolsets.getToolset({ appName: 'gmail' })
-
-    // Search for emails from/to this company
-    const searchQuery = contactEmail
-      ? `from:${contactEmail} OR to:${contactEmail}`
-      : `"${companyName}"`
-
-    const result = await toolset.executeAction('GMAIL_LIST_THREADS', {
-      query: searchQuery,
-      max_results: 10,
-    })
-
-    if (!result?.threads || result.threads.length === 0) {
-      return { lastEmailDays: null, unansweredEmails: 0, lastEmailSubject: null }
-    }
-
-    // Analyze threads for signals
-    const now = Date.now()
-    let latestDate = null
-    let unansweredCount = 0
-    let lastSubject = null
-
-    for (const thread of result.threads.slice(0, 5)) {
-      const threadDetail = await toolset.executeAction('GMAIL_GET_THREAD', {
-        thread_id: thread.id,
+    const res = await composioClient.get('/api/v3/connected_accounts')
+    return res.data.items || res.data.connected_accounts || []
+  } catch (e) {
+    // Try fallback endpoint
+    try {
+      const res2 = await axios.get('https://backend.composio.dev/api/v2/connectedAccounts', {
+        headers: { 'x-api-key': API_KEY },
+        timeout: 10000,
       })
-
-      const messages = threadDetail?.messages || []
-      if (messages.length === 0) continue
-
-      const lastMsg = messages[messages.length - 1]
-      const msgDate = new Date(parseInt(lastMsg.internalDate)).getTime()
-      if (!latestDate || msgDate > latestDate) {
-        latestDate = msgDate
-        lastSubject = lastMsg.subject || 'No subject'
-      }
-
-      // Check if last message is from us (unanswered) or from customer
-      const lastFrom = lastMsg.from || ''
-      const isFromUs = !lastFrom.includes(contactEmail?.split('@')[1] || '__never__')
-      if (isFromUs) unansweredCount++
+      return res2.data.items || []
+    } catch {
+      return []
     }
-
-    return {
-      lastEmailDays: latestDate ? Math.floor((now - latestDate) / 86400000) : null,
-      unansweredEmails: unansweredCount,
-      lastEmailSubject: lastSubject,
-    }
-  } catch (err) {
-    console.log(`⚠️  Composio Gmail error for ${companyName}:`, err.message)
-    return { lastEmailDays: null, unansweredEmails: 0, lastEmailSubject: null }
   }
 }
 
-// ─── Check if Composio Gmail is connected ────────────────────────────────────
-async function checkComposioStatus() {
+// ─── Execute tool via Composio ────────────────────────────────────────────────
+async function executeTool(toolName, params = {}) {
   try {
-    const composio = getComposio()
-    const connections = await composio.connections.list()
-    const gmailConnected = connections?.items?.some(c => c.appName?.toLowerCase() === 'gmail' && c.status === 'ACTIVE')
-    return { connected: !!gmailConnected, connections: connections?.items?.length || 0 }
-  } catch (err) {
-    return { connected: false, error: err.message }
-  }
-}
-
-// ─── Send email via Composio Gmail (for approved actions) ────────────────────
-async function sendEmailViaComposio(to, subject, body, from) {
-  try {
-    const composio = getComposio()
-    const toolset = await composio.toolsets.getToolset({ appName: 'gmail' })
-
-    const result = await toolset.executeAction('GMAIL_SEND_EMAIL', {
-      to,
-      subject,
-      body,
+    const res = await composioClient.post('/api/v3/actions/execute', {
+      action: toolName,
+      input: params,
     })
-
-    return { success: true, messageId: result?.id }
-  } catch (err) {
-    return { success: false, error: err.message }
+    return { success: true, data: res.data }
+  } catch (e) {
+    return { success: false, error: e.response?.data?.message || e.message }
   }
 }
 
-module.exports = { fetchGmailSignals, checkComposioStatus, sendEmailViaComposio }
+// ─── Send email via Gmail through Composio ────────────────────────────────────
+async function sendGmailEmail({ to, subject, body }) {
+  // Try Composio Gmail action
+  const result = await executeTool('GMAIL_SEND_EMAIL', {
+    recipient_email: to,
+    subject: subject,
+    body: body,
+  })
+
+  if (!result.success) {
+    console.log('Composio Gmail send failed:', result.error)
+    // Return success: false so caller can handle
+    return { success: false, error: result.error }
+  }
+
+  return { success: true }
+}
+
+// ─── Get Gmail emails for a contact ──────────────────────────────────────────
+async function getGmailEmails(contactEmail, maxResults = 5) {
+  const result = await executeTool('GMAIL_FETCH_EMAILS', {
+    query: `from:${contactEmail} OR to:${contactEmail}`,
+    max_results: maxResults,
+  })
+
+  if (!result.success) return []
+  return result.data?.response_data?.messages || result.data?.messages || []
+}
+
+// ─── Derive email signal from Gmail data ─────────────────────────────────────
+async function getEmailSignal(contactEmail) {
+  if (!contactEmail) {
+    return { lastEmailDays: 999, replied: false, unansweredCount: 0, lastSubject: '' }
+  }
+
+  const emails = await getGmailEmails(contactEmail, 5)
+
+  if (!emails || emails.length === 0) {
+    return { lastEmailDays: 90, replied: false, unansweredCount: 0, lastSubject: '' }
+  }
+
+  const sorted = [...emails].sort((a, b) =>
+    new Date(b.internalDate || b.date || 0) - new Date(a.internalDate || a.date || 0)
+  )
+
+  const latest = sorted[0]
+  const latestDate = new Date(latest.internalDate || latest.date || Date.now())
+  const daysSince = Math.max(0, Math.floor((Date.now() - latestDate) / (1000 * 60 * 60 * 24)))
+
+  const replied = emails.some(e => {
+    const from = (e.from || e.sender || '').toLowerCase()
+    return from.includes(contactEmail.toLowerCase())
+  })
+
+  const unanswered = emails.filter(e => {
+    const to = (e.to || e.recipient || '').toLowerCase()
+    return to.includes(contactEmail.toLowerCase())
+  }).length
+
+  return {
+    lastEmailDays: daysSince,
+    replied,
+    unansweredCount: unanswered,
+    lastSubject: latest.subject || '',
+  }
+}
+
+// ─── Check if Gmail is connected ─────────────────────────────────────────────
+async function checkGmailConnected() {
+  if (!API_KEY) return { connected: false, email: 'No API key' }
+
+  const accounts = await getConnectedAccounts()
+  const gmail = accounts.find(a =>
+    (a.appName || a.toolkit || '').toLowerCase().includes('gmail')
+  )
+
+  return {
+    connected: !!gmail,
+    accountId: gmail?.id || gmail?.nanoid || null,
+    email: gmail?.metadata?.email || gmail?.userEmail || 'Connected',
+  }
+}
+
+module.exports = {
+  getConnectedAccounts,
+  executeTool,
+  sendGmailEmail,
+  getEmailSignal,
+  checkGmailConnected,
+}

@@ -12,7 +12,9 @@ app.use(cors())
 app.use(express.json())
 
 // ─── Groq LLM Client ──────────────────────────────────────────────────────────
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+const groq = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
+  ? new Groq({ apiKey: process.env.GROQ_API_KEY })
+  : null
 
 // ─── In-memory customer store (real input from user) ─────────────────────────
 let customers = []
@@ -465,6 +467,28 @@ app.post('/api/sync/hubspot', async (req, res) => {
     })
   } catch (err) {
     console.error('HubSpot sync error:', err.message)
+    if (err.response?.status === 401 || !process.env.HUBSPOT_API_KEY) {
+      seedDemoData()
+      const demoResults = customers.map(customer => ({
+        name: customer.name,
+        email: typeof customer.email === 'string' ? customer.email : '',
+        company: customer.company || customer.name,
+        riskScore: customer.riskScore,
+        riskLevel: customer.riskLevel,
+        dealStage: customer.dealStage || customer.status,
+        arr: customer.arr,
+        source: 'Local demo data',
+      }))
+
+      console.warn('⚠️ HubSpot is not authenticated; returning local demo data for the sync flow.')
+      return res.json({
+        message: 'HubSpot is not connected. Local demo customer data was analyzed instead.',
+        total: demoResults.length,
+        gmailEnriched: false,
+        fallback: true,
+        results: demoResults,
+      })
+    }
     res.status(500).json({ error: err.message, hint: 'Check HUBSPOT_API_KEY in .env' })
   }
 })

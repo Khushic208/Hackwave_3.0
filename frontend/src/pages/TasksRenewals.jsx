@@ -148,7 +148,7 @@ export default function TasksRenewals() {
                   <tr
                     key={task.id}
                     className={`border-b border-[#1e2d3d] transition-colors ${
-                      task.status === 'Completed' ? 'opacity-40' : 'hover:bg-[#1a2942]'
+                      task.status === 'Completed' ? 'opacity-40' : 'hover:bg-indigo-50/60'
                     }`}
                   >
                     <td className="px-5 py-3 text-white text-xs font-medium max-w-[220px]">
@@ -218,7 +218,7 @@ export default function TasksRenewals() {
               </thead>
               <tbody>
                 {renewals.map(r => (
-                  <tr key={r.id} className="border-b border-[#1e2d3d] hover:bg-[#1a2942] transition-colors">
+                  <tr key={r.id} className="border-b border-slate-100 hover:bg-indigo-50/60 transition-colors">
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
                         <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white">

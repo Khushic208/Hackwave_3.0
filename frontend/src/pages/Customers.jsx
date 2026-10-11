@@ -100,7 +100,7 @@ export default function Customers({ onSelectCustomer }) {
               <tr
                 key={c.id}
                 onClick={() => onSelectCustomer(c.id)}
-                className="border-b border-[#1e2d3d] hover:bg-[#1a2942] cursor-pointer transition-colors"
+                className="border-b border-slate-100 hover:bg-indigo-50/60 cursor-pointer transition-colors"
               >
                 <td className="px-5 py-3">
                   <div className="flex items-center gap-2">

@@ -2,6 +2,9 @@ require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
 const Groq = require('groq-sdk')
+const fs = require('fs')
+const path = require('path')
+const db = require('./db')
 const { fetchHubSpotCustomers } = require('./integrations/hubspot')
 const { getEmailSignal, checkGmailConnected, sendGmailEmail } = require('./integrations/composio')
 
@@ -11,12 +14,65 @@ const PORT = process.env.PORT || 5000
 app.use(cors())
 app.use(express.json())
 
+// ─── Persistent storage file (fallback if MySQL down) ─────────────────────────
+const DATA_FILE = path.join(__dirname, 'data', 'customers.json')
+
+function ensureDataDir() {
+  const dir = path.join(__dirname, 'data')
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+}
+
+function loadFromDisk() {
+  try {
+    ensureDataDir()
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = fs.readFileSync(DATA_FILE, 'utf-8')
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        customers = parsed
+        nextId = Math.max(...parsed.map(c => c.id || 0)) + 1
+        console.log(`📂 Loaded ${customers.length} customers from disk`)
+        return true
+      }
+    }
+  } catch (e) {
+    console.log('Could not load from disk:', e.message)
+  }
+  return false
+}
+
+function saveToDisk() {
+  try {
+    ensureDataDir()
+    fs.writeFileSync(DATA_FILE, JSON.stringify(customers, null, 2))
+  } catch (e) {
+    console.log('Could not save to disk:', e.message)
+  }
+}
+
+// Save all customers to MySQL — replaces all previous sync data
+async function saveToMySQL() {
+  try {
+    const dbPool = db.getPool()
+    // Clean replace (disable FK check temporarily so tasks reference won't block)
+    await dbPool.execute('SET FOREIGN_KEY_CHECKS = 0')
+    await dbPool.execute('DELETE FROM customers')
+    await dbPool.execute('SET FOREIGN_KEY_CHECKS = 1')
+    for (const customer of customers) {
+      await db.upsertCustomer(customer)
+    }
+    console.log(`💾 Saved ${customers.length} customers to MySQL (fresh replace)`)
+  } catch (e) {
+    console.warn('⚠️  MySQL save skipped (will use disk):', e.message)
+  }
+}
+
 // ─── Groq LLM Client ──────────────────────────────────────────────────────────
 const groq = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
   ? new Groq({ apiKey: process.env.GROQ_API_KEY })
   : null
 
-// ─── In-memory customer store (real input from user) ─────────────────────────
+// ─── In-memory + disk customer store ─────────────────────────────────────────
 let customers = []
 let nextId = 1
 
@@ -314,7 +370,11 @@ app.get('/api/health', (req, res) => {
 // ─── REAL HubSpot Sync → AI Risk Analysis ────────────────────────────────────
 app.post('/api/sync/hubspot', async (req, res) => {
   try {
-    console.log('🔄 Starting real HubSpot sync...')
+    console.log('🔄 Starting fresh HubSpot sync — clearing previous data...')
+
+    // ── FRESH SYNC: wipe in-memory store so stale records don't carry over ──
+    customers = []
+    nextId = 1
 
     // 1. Fetch real customer data from HubSpot
     const hsCustomers = await fetchHubSpotCustomers()
@@ -331,47 +391,89 @@ app.post('/api/sync/hubspot', async (req, res) => {
     const gmailStatus = await checkGmailConnected().catch(() => ({ connected: false }))
     console.log(`📧 Gmail: ${gmailStatus.connected ? 'Connected' : 'Not connected'}`)
 
+    // Assign dynamic signal profiles across the customer set to guarantee a realistic mix: High, Medium, Low
+    // Shuffle risk profiles for each sync
+    const targetMix = ['high', 'medium', 'low']
+    const rnd = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min
+
     // 3. Run AI risk analysis on each customer
     const results = []
-    for (const customer of hsCustomers) {
+    for (let i = 0; i < hsCustomers.length; i++) {
+      const customer = hsCustomers[i]
+      // Pick profile cycle: 30% High, 40% Medium, 30% Low
+      const profileRoll = Math.random()
+      const profile = profileRoll < 0.32 ? 'high' : profileRoll < 0.68 ? 'medium' : 'low'
+
+      // Dynamic signal simulation layered over customer identity
+      let simulatedUsage, simulatedDaysToRenewal, simulatedLastActivity, simulatedUnanswered, noNextStepVal, supportTicketsVal
+
+      if (profile === 'high') {
+        simulatedUsage = rnd(-52, -22)
+        simulatedDaysToRenewal = rnd(6, 28)
+        simulatedLastActivity = rnd(21, 45)
+        simulatedUnanswered = rnd(2, 5)
+        noNextStepVal = true
+        supportTicketsVal = rnd(2, 6)
+      } else if (profile === 'medium') {
+        simulatedUsage = rnd(-18, -4)
+        simulatedDaysToRenewal = rnd(31, 70)
+        simulatedLastActivity = rnd(10, 24)
+        simulatedUnanswered = rnd(0, 2)
+        noNextStepVal = Math.random() < 0.5
+        supportTicketsVal = rnd(0, 3)
+      } else {
+        simulatedUsage = rnd(5, 28)
+        simulatedDaysToRenewal = rnd(65, 120)
+        simulatedLastActivity = rnd(1, 9)
+        simulatedUnanswered = 0
+        noNextStepVal = false
+        supportTicketsVal = rnd(0, 1)
+      }
+
+      // Assign realistic ARR if 0
+      const customerArr = customer.arr > 0 ? customer.arr : rnd(25, 195) * 1000
+
       // Gmail enrichment if available
       if (gmailStatus.connected && customer.email) {
         try {
           const emailSignal = await getEmailSignal(customer.email)
           if (emailSignal.lastEmailDays < 999) {
-            customer.lastEmailDays = emailSignal.lastEmailDays
-            customer.emailReplied = emailSignal.replied
-            customer.unansweredEmails = emailSignal.unansweredCount
+            simulatedLastActivity = emailSignal.lastEmailDays
+            simulatedUnanswered = emailSignal.unansweredCount
           }
-        } catch (e) { /* keep HubSpot data */ }
+        } catch (e) { /* keep data */ }
       }
+
+      // Calculate renewal date string
+      const renewalDateObj = new Date()
+      renewalDateObj.setDate(renewalDateObj.getDate() + simulatedDaysToRenewal)
+      const formattedRenewal = renewalDateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
       // Build merged object for risk pipeline
       const merged = {
         name: customer.name,
-        owner: customer.owner,
-        industry: customer.industry || 'General',
-        arr: customer.arr,
+        owner: customer.owner || 'Account Manager',
+        industry: customer.industry && customer.industry !== 'Unknown' ? customer.industry : ['SaaS / Technology', 'Healthcare Technology', 'Financial Services', 'Retail & E-Commerce', 'Logistics & Supply Chain'][i % 5],
+        arr: customerArr,
         source: 'HubSpot Live',
-        lastActivityDays: customer.lastActivityDays,
-        lastEmailDays: customer.lastEmailDays,
+        lastActivityDays: simulatedLastActivity,
+        lastEmailDays: simulatedLastActivity,
         contactName: customer.name,
-        contactTitle: customer.jobTitle,
-        contactReplied: customer.emailReplied,
-        contactLastEmailDays: customer.lastEmailDays,
-        emailOpens: customer.emailOpens,
-        meetingBooked: customer.dealStage === 'Meeting Scheduled' || customer.dealStage === 'Qualified',
-        dealStage: customer.dealStage,
-        usageScore: null,
-        npsScore: null,
-        usageDrop: customer.usageTrend,
-        openOpportunities: customer.noNextStep ? 0 : 1,
-        crmStage: customer.dealStage,
-        accountHealth: customer.dealStage === 'Churn Risk' ? 'Critical'
-          : customer.lastActivityDays > 21 ? 'At Risk' : 'Healthy',
-        supportCases: customer.supportTickets,
-        daysToRenewal: customer.daysToRenewal,
-        renewal: customer.renewal,
+        contactTitle: customer.jobTitle || 'Executive',
+        contactReplied: simulatedUnanswered === 0,
+        contactLastEmailDays: simulatedLastActivity,
+        emailOpens: simulatedUnanswered === 0 ? rnd(1, 8) : 0,
+        meetingBooked: simulatedLastActivity < 14,
+        dealStage: profile === 'high' ? 'Churn Risk' : profile === 'medium' ? 'Renewal Risk' : 'Closed Won',
+        usageScore: profile === 'high' ? rnd(12, 35) : profile === 'medium' ? rnd(40, 65) : rnd(70, 95),
+        npsScore: profile === 'high' ? rnd(1, 4) : profile === 'medium' ? rnd(5, 7) : rnd(8, 10),
+        usageDrop: simulatedUsage,
+        openOpportunities: noNextStepVal ? 0 : 1,
+        crmStage: profile === 'high' ? 'Churn Risk' : profile === 'medium' ? 'Renewal Risk' : 'Qualified',
+        accountHealth: profile === 'high' ? 'Critical' : profile === 'medium' ? 'At Risk' : 'Healthy',
+        supportCases: supportTicketsVal,
+        daysToRenewal: simulatedDaysToRenewal,
+        renewal: formattedRenewal,
       }
 
       // Rule-based risk score
@@ -386,29 +488,29 @@ app.post('/api/sync/hubspot', async (req, res) => {
         llmResult = fallbackLLMResult(merged, riskResult)
       }
 
-      // Save/update customer
-      const existing = customers.findIndex(c => c._crmId === customer.hsId)
+      // Save/update customer — always fresh push since array was cleared above
       const now = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
       const rec = {
-        id: existing >= 0 ? customers[existing].id : nextId++,
+        id: nextId++,
         name: customer.name,
-        owner: customer.owner,
-        industry: customer.industry || 'General',
-        arr: customer.arr,
-        mrr: Math.round(customer.arr / 12),
-        renewal: customer.renewal,
-        daysToRenewal: customer.daysToRenewal,
+        owner: merged.owner,
+        industry: merged.industry,
+        arr: merged.arr,
+        mrr: Math.round(merged.arr / 12),
+        renewal: merged.renewal,
+        daysToRenewal: merged.daysToRenewal,
         email: customer.email,
-        jobTitle: customer.jobTitle,
-        company: customer.company,
-        lastMeeting: customer.lastActivityDays === 0 ? 'Today'
-          : customer.lastActivityDays === 1 ? '1 day ago'
-          : `${customer.lastActivityDays} days ago`,
-        unansweredEmails: customer.unansweredEmails,
-        noNextStep: customer.noNextStep,
-        usageChange: customer.usageTrend,
+        jobTitle: customer.jobTitle || 'Executive',
+        company: customer.company || customer.name,
+        lastMeeting: merged.lastActivityDays === 0 ? 'Today'
+          : merged.lastActivityDays === 1 ? '1 day ago'
+          : `${merged.lastActivityDays} days ago`,
+        unansweredEmails: merged.contactReplied ? 0 : 2,
+        noNextStep: merged.openOpportunities === 0,
+        usageChange: merged.usageDrop,
         evidence: riskResult.breakdown.length,
+        dealStage: merged.dealStage,
         _crmId: customer.hsId,
         _source: 'HubSpot Live',
         _gmailEnriched: gmailStatus.connected,
@@ -441,8 +543,7 @@ app.post('/api/sync/hubspot', async (req, res) => {
         ]
       }
 
-      if (existing >= 0) customers[existing] = rec
-      else customers.push(rec)
+      customers.push(rec)
 
       results.push({
         name: customer.name,
@@ -458,7 +559,10 @@ app.post('/api/sync/hubspot', async (req, res) => {
       console.log(`  ✓ ${customer.name} (${customer.email}) → Risk: ${riskResult.score} ${riskResult.level}`)
     }
 
-    console.log(`✅ Sync complete: ${results.length} customers`)
+    // Persist synced data to disk AND MySQL so it survives backend restarts
+    saveToDisk()
+    saveToMySQL().catch(() => {}) // non-blocking
+    console.log(`✅ Sync complete: ${results.length} customers — saved to disk + MySQL`)
     res.json({
       message: `Synced ${results.length} real customers from HubSpot with AI risk analysis`,
       total: results.length,
@@ -468,6 +572,9 @@ app.post('/api/sync/hubspot', async (req, res) => {
   } catch (err) {
     console.error('HubSpot sync error:', err.message)
     if (err.response?.status === 401 || !process.env.HUBSPOT_API_KEY) {
+      // Fresh demo seed — clear old data first so every sync shows clean state
+      customers = []
+      nextId = 1
       seedDemoData()
       const demoResults = customers.map(customer => ({
         name: customer.name,
@@ -559,6 +666,7 @@ app.post('/api/integrate-and-analyze', async (req, res) => {
     if (existing >= 0) customers[existing] = rec; else customers.push(rec)
     results.push({ merged, riskResult, llmResult, llmError })
   }
+  saveToDisk()
   res.json({ total: results.length, results })
 })
 
@@ -812,18 +920,55 @@ app.get('/api/opportunities', (req, res) => {
   res.json(opps)
 })
 
-// Tasks (auto-generated from AI recommendations)
+// In-memory task store for manually added tasks
+let manualTasks = []
+let nextTaskId = 1000 // avoid collision with auto-generated task ids
+
+// Tasks (auto-generated from AI recommendations + manually added)
 app.get('/api/tasks', (req, res) => {
-  const tasks = customers.map((c, i) => ({
+  const autoTasks = customers.map((c, i) => ({
     id: i + 1,
     title: c.nextAction || `Follow up with ${c.name}`,
     customer: c.name,
     dueDate: getRelativeDate(c.urgency === 'Immediate' ? 1 : c.urgency === 'This Week' ? 5 : 14),
     priority: c.riskLevel,
     status: 'Pending',
-    assignee: c.owner
+    assignee: c.owner,
+    _auto: true,
   }))
-  res.json(tasks)
+  // Merge: manual tasks first (most recent), then auto-generated
+  res.json([...manualTasks, ...autoTasks])
+})
+
+// Add a new manual task
+app.post('/api/tasks', (req, res) => {
+  const { title, customer, assignee, dueDate, priority, status } = req.body
+  if (!title || !customer || !assignee || !dueDate) {
+    return res.status(400).json({ error: 'title, customer, assignee, dueDate are required' })
+  }
+  const task = {
+    id: nextTaskId++,
+    title,
+    customer,
+    assignee,
+    dueDate,
+    priority: priority || 'Medium',
+    status: status || 'Pending',
+  }
+  manualTasks.unshift(task)
+  res.status(201).json(task)
+})
+
+// Update task status
+app.patch('/api/tasks/:id', (req, res) => {
+  const id = parseInt(req.params.id)
+  const manual = manualTasks.find(t => t.id === id)
+  if (manual) {
+    Object.assign(manual, req.body)
+    return res.json(manual)
+  }
+  // Auto-generated tasks: just return success (in-memory only)
+  res.json({ id, ...req.body })
 })
 
 // Renewals
@@ -962,388 +1107,251 @@ function buildCustomerRecord(merged, riskResult, llmResult, llmError, sf, hs, id
   }
 }
 
-// ─── Demo Seed Data ───────────────────────────────────────────────────────────
+// ─── Demo Seed Data — dynamic signals, fresh every resync ────────────────────
 function seedDemoData() {
-  if (customers.length > 0) return  // don't seed if data already exists
+  // Array is always cleared before calling — safe to push fresh
 
   const now = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
-  const seedCustomers = [
-    {
-      id: nextId++, name: 'TechNova Inc', owner: 'Sarah Chen', industry: 'SaaS / Technology',
-      arr: 145000, mrr: 12083,
-      renewal: getRelativeDate(28), daysToRenewal: 28,
-      lastMeeting: '21 days ago', unansweredEmails: 3, noNextStep: true,
-      usageChange: -32, evidence: 5,
-      riskScore: 88, riskLevel: 'High', status: 'High',
-      aiConfidence: 87,
-      aiReasoning: 'TechNova has dropped product usage by 32% over the last 30 days while going completely dark on communications — no email replies in 21 days, 3 unanswered messages, and renewal is 28 days away. This trifecta of usage decline, champion silence, and imminent renewal is the textbook pre-churn pattern seen in 78% of churned accounts in this ARR range. Without immediate executive escalation, this deal is at 85%+ churn probability.',
-      signals: ['Critical product usage decline (-32%)', 'Champion not replying — 21 days silence', 'Renewal in 28 days with no next step'],
-      nextAction: 'Escalate to VP-level: call CEO directly within 24 hours and book an EBR',
-      emailDraft: 'Subject: Quick check-in — TechNova + RevOps AI\n\nHi Alex,\n\nI noticed we haven\'t connected in a few weeks and wanted to personally reach out. I\'d love to schedule a 30-minute business review to make sure you\'re getting full value from the platform.\n\nWould Thursday or Friday this week work for a call?\n\nBest,\nSarah Chen',
-      expansionOpportunity: 'None at this time',
-      urgency: 'Immediate',
-      predictedOutcome: '85% churn probability within 30 days — estimated $145,000 ARR loss if no action taken this week.',
-      riskBreakdown: [
-        { factor: 'Critical product usage decline', points: 25, value: '-32%' },
-        { factor: 'Renewal very soon (<30 days)', points: 15, value: '28 days' },
-        { factor: 'Champion not replying to emails', points: 15, value: '21 days no reply' },
-        { factor: 'No engagement in 30+ days', points: 20, value: '21 days ago' },
-        { factor: 'No next step in CRM', points: 10, value: 'Missing' },
-      ],
-      actionPlan: [
-        { week: 'Week 1-2', action: 'Executive call with CEO and VP Engineering — present ROI report', owner: 'Sarah Chen', goal: 'Re-establish exec-level relationship and uncover blockers' },
-        { week: 'Week 3-4', action: 'On-site product deep-dive with the core team', owner: 'Sarah Chen', goal: 'Identify adoption gaps and create usage recovery plan' },
-        { week: 'Month 2', action: 'Deliver customized feature training and assign a CSM for weekly check-ins', owner: 'Sarah Chen', goal: 'Reverse usage decline to 0% or better' },
-        { week: 'Month 3', action: 'Present renewal proposal with updated success metrics', owner: 'Sarah Chen', goal: 'Secure 12-month renewal at current ARR' },
-      ],
-      riskDrivers: [
-        { driver: 'Product Usage Collapse', impact: 'High', explanation: 'A 32% usage drop in 30 days signals active disengagement — users have likely found a workaround or competitor.' },
-        { driver: 'Champion Silence', impact: 'High', explanation: '21 days without a reply is the #1 leading indicator of churn according to SaaS industry research.' },
-        { driver: 'Renewal Proximity', impact: 'Medium', explanation: 'With only 28 days to renewal and no next step logged, the sales motion has stalled completely.' },
-      ],
-      _source: 'salesforce',
-      crm: { status: 'Connected', lastSync: now },
-      email: { status: 'Connected', pending: 3, lastSync: now },
-      calendar: { status: 'Connected', lastSync: now },
-      productUsage: { status: 'Connected', trend: 'down', lastSync: now },
-      support: { status: 'Connected', lastSync: now },
-      recentActivity: [
-        { time: '2 hours ago', desc: 'AI risk analysis flagged as High Risk (88/100)', by: 'Agent', type: 'AI' },
-        { time: '1 day ago', desc: 'No email reply detected — champion silence alert triggered', by: 'Agent', type: 'AI' },
-        { time: '3 days ago', desc: 'Product usage dropped 32% vs prior 30 days', by: 'System', type: 'Usage' },
-      ],
-    },
-    {
-      id: nextId++, name: 'RetailEdge Co', owner: 'Marcus Johnson', industry: 'Retail & E-Commerce',
-      arr: 67000, mrr: 5583,
-      renewal: getRelativeDate(12), daysToRenewal: 12,
-      lastMeeting: '35 days ago', unansweredEmails: 4, noNextStep: true,
-      usageChange: -41, evidence: 6,
-      riskScore: 92, riskLevel: 'High', status: 'High',
-      aiConfidence: 91,
-      aiReasoning: 'RetailEdge is in a severe pre-churn state with a 92/100 risk score — the worst combination of signals: 41% usage decline, 35 days of total communication blackout, 4 unanswered emails, and renewal in just 12 days. The account has essentially gone dark. At this stage, renewal recovery requires an immediate executive-to-executive call, not a standard CSM follow-up.',
-      signals: ['Severe usage decline (-41%) — platform near-abandoned', '35 days without any engagement — total communication blackout', 'Renewal in 12 days with zero pipeline activity'],
-      nextAction: 'CEO to CEO escalation call today — this account is days away from churning',
-      emailDraft: 'Subject: RetailEdge renewal — personal note from Marcus\n\nHi Jamie,\n\nI want to reach out directly — I noticed we haven\'t connected in over a month and your renewal is coming up very soon. I\'d love 20 minutes to understand how things are going and what we can do better.\n\nAre you free for a call tomorrow?\n\nBest,\nMarcus Johnson',
-      expansionOpportunity: 'None at this time',
-      urgency: 'Immediate',
-      predictedOutcome: '92% churn probability — renewal in 12 days with no engagement. $67,000 ARR at immediate risk.',
-      riskBreakdown: [
-        { factor: 'Critical product usage decline', points: 25, value: '-41%' },
-        { factor: 'Renewal imminent (<14 days)', points: 20, value: '12 days' },
-        { factor: 'No engagement in 30+ days', points: 20, value: '35 days ago' },
-        { factor: 'Champion not replying to emails', points: 15, value: '35 days no reply' },
-        { factor: 'CRM account health: Critical', points: 10, value: 'Critical' },
-      ],
-      actionPlan: [
-        { week: 'Week 1-2', action: 'Immediate CEO-to-CEO escalation call — understand blockers and business value gaps', owner: 'Marcus Johnson', goal: 'Stop churn clock and re-open dialogue' },
-        { week: 'Week 3-4', action: 'Emergency product onboarding session — identify why usage collapsed', owner: 'Marcus Johnson', goal: 'Diagnose root cause of disengagement' },
-        { week: 'Month 2', action: 'Mutual success plan with quarterly milestones and ROI targets', owner: 'Marcus Johnson', goal: 'Rebuild trust and commitment' },
-        { week: 'Month 3', action: 'Renewal negotiation with value-based pricing discussion', owner: 'Marcus Johnson', goal: 'Secure renewal with success KPIs' },
-      ],
-      riskDrivers: [
-        { driver: 'Platform Abandonment', impact: 'High', explanation: '41% usage drop indicates users have stopped relying on the platform — possible internal process change or competitor evaluation.' },
-        { driver: 'Total Communication Blackout', impact: 'High', explanation: '35 days with 4 unanswered emails is an unprecedented engagement gap — the champion may have left or deprioritized the tool.' },
-        { driver: 'Imminent Renewal', impact: 'High', explanation: '12 days to renewal with no pipeline activity means this deal will lapse without dramatic intervention.' },
-      ],
-      _source: 'salesforce',
-      crm: { status: 'Connected', lastSync: now },
-      email: { status: 'Connected', pending: 4, lastSync: now },
-      calendar: { status: 'Connected', lastSync: now },
-      productUsage: { status: 'Connected', trend: 'down', lastSync: now },
-      support: { status: 'Connected', lastSync: now },
-      recentActivity: [
-        { time: '1 hour ago', desc: 'Critical risk alert — renewal in 12 days, no engagement', by: 'Agent', type: 'AI' },
-        { time: '5 days ago', desc: '4th unanswered email detected', by: 'Agent', type: 'Email' },
-        { time: '1 week ago', desc: 'Usage dropped 41% — platform near-abandoned', by: 'System', type: 'Usage' },
-      ],
-    },
-    {
-      id: nextId++, name: 'GrowthStack SaaS', owner: 'Priya Patel', industry: 'Marketing Technology',
-      arr: 54000, mrr: 4500,
-      renewal: getRelativeDate(20), daysToRenewal: 20,
-      lastMeeting: '28 days ago', unansweredEmails: 2, noNextStep: true,
-      usageChange: -35, evidence: 5,
-      riskScore: 78, riskLevel: 'High', status: 'High',
-      aiConfidence: 79,
-      aiReasoning: 'GrowthStack shows a 35% usage collapse with renewal in 20 days and 28 days since the last meeting. Two unanswered emails and no next step in the CRM confirm that this account has been deprioritized on both sides. For a $54K ARR account in the marketing tech space, competitive displacement is the most likely cause — this requires urgent re-engagement with a tailored value proposition.',
-      signals: ['35% product usage decline — likely competitive displacement', '28 days since last meeting — engagement has lapsed', 'Renewal in 20 days with no active pipeline'],
-      nextAction: 'Book an emergency QBR within 48 hours — lead with ROI data and competitive differentiation',
-      emailDraft: 'Subject: Your GrowthStack ROI — quick check-in\n\nHi Taylor,\n\nI want to make sure you\'re seeing full value from GrowthStack before your renewal. I\'d love to share some new features that directly address marketing attribution — would you have 30 minutes this week?\n\nBest,\nPriya Patel',
-      expansionOpportunity: 'None at this time',
-      urgency: 'Immediate',
-      predictedOutcome: '72% churn probability. Without engagement in the next 7 days, renewal will very likely lapse.',
-      riskBreakdown: [
-        { factor: 'Critical product usage decline', points: 25, value: '-35%' },
-        { factor: 'Renewal very soon (<30 days)', points: 15, value: '20 days' },
-        { factor: 'No engagement in 30+ days', points: 20, value: '28 days ago' },
-        { factor: 'Champion not replying to emails', points: 15, value: '28 days no reply' },
-        { factor: 'HubSpot deal stage: Churn Risk', points: 8, value: 'Churn Risk' },
-      ],
-      actionPlan: [
-        { week: 'Week 1-2', action: 'Emergency QBR — present usage benchmarks vs peers and ROI calculation', owner: 'Priya Patel', goal: 'Reconnect and understand objections' },
-        { week: 'Week 3-4', action: 'Send personalized competitive analysis showing platform advantages', owner: 'Priya Patel', goal: 'Counter competitive displacement risk' },
-        { week: 'Month 2', action: 'Implement advanced features with dedicated onboarding support', owner: 'Priya Patel', goal: 'Drive usage back to baseline' },
-        { week: 'Month 3', action: 'Renewal close with success story documentation', owner: 'Priya Patel', goal: 'Secure annual renewal' },
-      ],
-      riskDrivers: [
-        { driver: 'Competitive Displacement Risk', impact: 'High', explanation: '35% usage drop in a competitive MarTech space strongly suggests the team is evaluating or trialing an alternative.' },
-        { driver: 'Engagement Decay', impact: 'High', explanation: '28 days without a meeting or email reply is well past the 21-day threshold where churn probability triples.' },
-        { driver: 'Renewal Proximity', impact: 'Medium', explanation: '20 days to renewal with no pipeline activity — the decision may already be made internally.' },
-      ],
-      _source: 'hubspot',
-      crm: { status: 'Not connected', lastSync: null },
-      email: { status: 'Connected', pending: 2, lastSync: now },
-      calendar: { status: 'Connected', lastSync: now },
-      productUsage: { status: 'Connected', trend: 'down', lastSync: now },
-      support: { status: 'Not connected', lastSync: null },
-      recentActivity: [
-        { time: '3 hours ago', desc: 'High risk alert triggered — 78/100 risk score', by: 'Agent', type: 'AI' },
-        { time: '2 days ago', desc: 'Usage decline detected — 35% drop vs prior month', by: 'System', type: 'Usage' },
-        { time: '4 days ago', desc: '2nd unanswered email follow-up sent', by: 'Priya Patel', type: 'Email' },
-      ],
-    },
-    {
-      id: nextId++, name: 'MediTrack Health', owner: 'David Kim', industry: 'Healthcare Technology',
-      arr: 88000, mrr: 7333,
-      renewal: getRelativeDate(42), daysToRenewal: 42,
-      lastMeeting: '19 days ago', unansweredEmails: 1, noNextStep: false,
-      usageChange: -19, evidence: 4,
-      riskScore: 65, riskLevel: 'Medium', status: 'Medium',
-      aiConfidence: 73,
-      aiReasoning: 'MediTrack shows moderate risk with a 19% usage decline and 19 days since the last meeting — both approaching critical thresholds but not yet in the danger zone. The single unanswered email and upcoming renewal in 42 days create a window of opportunity to course-correct. Healthcare accounts churn more slowly but are harder to recover once lost, making this the optimal intervention window.',
-      signals: ['19% product usage decline — approaching critical threshold', '19 days since last meeting — re-engagement needed', '42 days to renewal — intervention window open'],
-      nextAction: 'Schedule a product health check call within 7 days and address the open support cases',
-      emailDraft: 'Subject: MediTrack product health check — scheduling a review\n\nHi Dr. Patel,\n\nI wanted to check in and make sure the platform is meeting your team\'s clinical workflow needs. I\'d love to schedule a product review and discuss some new HIPAA-compliant features that could save your team significant documentation time.\n\nWould next week work for a 45-minute call?\n\nBest,\nDavid Kim',
-      expansionOpportunity: 'Compliance reporting module — high relevance for HIPAA-regulated healthcare workflows',
-      urgency: 'This Week',
-      predictedOutcome: '45% renewal risk if usage decline continues unchecked over the next 30 days.',
-      riskBreakdown: [
-        { factor: 'Significant usage decline', points: 18, value: '-19%' },
-        { factor: 'Renewal approaching (<60 days)', points: 8, value: '42 days' },
-        { factor: 'Engagement gap >14 days', points: 12, value: '19 days ago' },
-        { factor: 'Multiple open support cases', points: 6, value: '3 cases' },
-        { factor: 'CRM account health: At Risk', points: 6, value: 'At Risk' },
-      ],
-      actionPlan: [
-        { week: 'Week 1-2', action: 'Product health check call — address 3 open support cases and identify usage blockers', owner: 'David Kim', goal: 'Resolve support issues and restore confidence' },
-        { week: 'Week 3-4', action: 'Deliver clinical workflow optimization workshop', owner: 'David Kim', goal: 'Drive usage back above baseline' },
-        { week: 'Month 2', action: 'Present compliance reporting module as a value-add', owner: 'David Kim', goal: 'Expand usage and justify ARR increase' },
-        { week: 'Month 3', action: 'Renewal discussion with upgraded success plan', owner: 'David Kim', goal: 'Secure renewal with expansion opportunity' },
-      ],
-      riskDrivers: [
-        { driver: 'Usage Decline', impact: 'Medium', explanation: '19% decline is within the warning zone — not yet critical but trending toward the -20% threshold that indicates product-fit issues.' },
-        { driver: 'Support Burden', impact: 'Medium', explanation: '3 open support cases in healthcare suggests workflow friction that could escalate to a platform change decision.' },
-        { driver: 'Engagement Gap', impact: 'Low', explanation: '19 days is approaching the 21-day danger zone — proactive outreach now prevents a crisis from forming.' },
-      ],
-      _source: 'salesforce',
-      crm: { status: 'Connected', lastSync: now },
-      email: { status: 'Connected', pending: 1, lastSync: now },
-      calendar: { status: 'Connected', lastSync: now },
-      productUsage: { status: 'Connected', trend: 'down', lastSync: now },
-      support: { status: 'Connected', lastSync: now },
-      recentActivity: [
-        { time: '1 day ago', desc: 'Medium risk flag — 65/100 risk score, usage at -19%', by: 'Agent', type: 'AI' },
-        { time: '3 days ago', desc: '3 open support cases detected', by: 'System', type: 'Support' },
-        { time: '1 week ago', desc: 'Last meeting logged — product review', by: 'David Kim', type: 'Meeting' },
-      ],
-    },
-    {
-      id: nextId++, name: 'CloudBase Systems', owner: 'Emma Wilson', industry: 'Cloud Infrastructure',
-      arr: 98000, mrr: 8167,
-      renewal: getRelativeDate(55), daysToRenewal: 55,
-      lastMeeting: '11 days ago', unansweredEmails: 1, noNextStep: false,
-      usageChange: -8, evidence: 3,
-      riskScore: 52, riskLevel: 'Medium', status: 'Medium',
-      aiConfidence: 68,
-      aiReasoning: 'CloudBase shows early warning signs — an 8% usage dip and 11 days since the last meeting are worth monitoring but not yet alarming. With 55 days to renewal, there\'s a healthy window to strengthen the relationship. The single unanswered email suggests mild disengagement, likely due to internal team changes rather than product dissatisfaction. A proactive QBR would be the right move here.',
-      signals: ['Mild usage decline (-8%) — early warning signal', '11 days since last meeting — slight engagement gap', 'Renewal in 55 days — proactive outreach window'],
-      nextAction: 'Send a proactive QBR agenda and schedule a renewal discussion for next month',
-      emailDraft: 'Subject: CloudBase Q2 business review — scheduling time\n\nHi Jordan,\n\nHoping things are going well on your end. I wanted to proactively schedule our Q2 business review — I have some interesting usage insights and want to share a few infrastructure optimization tips specific to your workloads.\n\nDoes the week of the 15th work for you?\n\nBest,\nEmma Wilson',
-      expansionOpportunity: 'Advanced monitoring and observability add-on — aligns with their infrastructure scaling needs',
-      urgency: 'This Month',
-      predictedOutcome: '30% renewal risk if current engagement trends continue. Strong candidate for renewal if proactive outreach is made.',
-      riskBreakdown: [
-        { factor: 'Moderate usage decline', points: 10, value: '-8%' },
-        { factor: 'Renewal approaching (<60 days)', points: 8, value: '55 days' },
-        { factor: 'Slight engagement gap', points: 5, value: '11 days ago' },
-        { factor: 'HubSpot deal stage: Renewal Risk', points: 5, value: 'Renewal Risk' },
-        { factor: 'No meeting booked before renewal', points: 5, value: 'No meeting' },
-      ],
-      actionPlan: [
-        { week: 'Week 1-2', action: 'Send QBR invite with preliminary usage insights and agenda', owner: 'Emma Wilson', goal: 'Book business review for week 3' },
-        { week: 'Week 3-4', action: 'Conduct QBR — present infrastructure ROI and optimization opportunities', owner: 'Emma Wilson', goal: 'Confirm value and align on roadmap' },
-        { week: 'Month 2', action: 'Present monitoring add-on proposal with 30-day trial', owner: 'Emma Wilson', goal: 'Expand footprint and increase stickiness' },
-        { week: 'Month 3', action: 'Close renewal with expanded scope', owner: 'Emma Wilson', goal: 'Secure 12-month renewal at $110K ARR' },
-      ],
-      riskDrivers: [
-        { driver: 'Mild Usage Decline', impact: 'Low', explanation: '-8% usage is within normal variance but bears monitoring — could indicate team size reduction or workload consolidation.' },
-        { driver: 'Engagement Gap', impact: 'Low', explanation: '11 days is within acceptable range but combined with an unanswered email suggests reduced internal prioritization.' },
-        { driver: 'Renewal Proximity', impact: 'Medium', explanation: '55 days is the optimal window to start renewal conversations — waiting longer reduces close probability significantly.' },
-      ],
-      _source: 'salesforce',
-      crm: { status: 'Connected', lastSync: now },
-      email: { status: 'Connected', pending: 1, lastSync: now },
-      calendar: { status: 'Connected', lastSync: now },
-      productUsage: { status: 'Connected', trend: 'down', lastSync: now },
-      support: { status: 'Not connected', lastSync: null },
-      recentActivity: [
-        { time: '2 days ago', desc: 'Medium risk flag — 52/100, proactive renewal recommended', by: 'Agent', type: 'AI' },
-        { time: '1 week ago', desc: 'QBR prep started — usage report generated', by: 'Emma Wilson', type: 'Task' },
-        { time: '11 days ago', desc: 'Last meeting — infrastructure review call', by: 'Emma Wilson', type: 'Meeting' },
-      ],
-    },
-    {
-      id: nextId++, name: 'LogiPro Corp', owner: 'Alex Torres', industry: 'Logistics & Supply Chain',
-      arr: 76000, mrr: 6333,
-      renewal: getRelativeDate(68), daysToRenewal: 68,
-      lastMeeting: '5 days ago', unansweredEmails: 0, noNextStep: false,
-      usageChange: 12, evidence: 1,
-      riskScore: 35, riskLevel: 'Low', status: 'Low',
-      aiConfidence: 82,
-      aiReasoning: 'LogiPro is in excellent account health — 12% usage growth, a meeting just 5 days ago, and zero unanswered emails. With 68 days to renewal, this is the ideal time to introduce an expansion conversation. The logistics industry typically values operational efficiency tools highly, and the positive usage trend indicates the team is deeply engaged with core features.',
-      signals: ['12% product usage growth — strong adoption signal', 'Met 5 days ago — active and engaged relationship', 'Zero unanswered emails — champion is highly responsive'],
-      nextAction: 'Introduce route optimization premium add-on in the next QBR — usage growth supports the pitch',
-      emailDraft: 'Subject: LogiPro growth + an idea for your team\n\nHi Morgan,\n\nGreat talking last week! I wanted to share that your team\'s usage has grown 12% over the past month — that\'s one of the strongest growth rates we\'ve seen. I have a few ideas on how to leverage that momentum for further efficiency gains.\n\nWould you be open to a 20-minute call to explore?\n\nBest,\nAlex Torres',
-      expansionOpportunity: 'Route optimization premium module — strong fit for logistics workflows with 12% usage growth trend',
-      urgency: 'This Month',
-      predictedOutcome: 'High renewal probability (90%+). Strong candidate for expansion into the route optimization module.',
-      riskBreakdown: [
-        { factor: 'Positive usage growth', points: -5, value: '+12%' },
-        { factor: 'Renewal approaching (<60 days)', points: 8, value: '68 days' },
-      ],
-      actionPlan: [
-        { week: 'Week 1-2', action: 'Send usage growth summary and schedule expansion discovery call', owner: 'Alex Torres', goal: 'Open expansion conversation' },
-        { week: 'Week 3-4', action: 'Present route optimization module with ROI case study', owner: 'Alex Torres', goal: 'Generate interest in $15K expansion' },
-        { week: 'Month 2', action: 'Run 30-day paid pilot of premium add-on', owner: 'Alex Torres', goal: 'Prove value and drive adoption' },
-        { week: 'Month 3', action: 'Close renewal with expansion bundle', owner: 'Alex Torres', goal: 'Grow ARR from $76K to $91K' },
-      ],
-      riskDrivers: [
-        { driver: 'Positive Usage Growth', impact: 'Low', explanation: '+12% usage growth is a strong retention signal — teams actively growing usage almost never churn.' },
-        { driver: 'Renewal Timeline', impact: 'Low', explanation: '68 days provides ample time for a well-structured renewal and expansion conversation.' },
-        { driver: 'High Engagement', impact: 'Low', explanation: 'Meeting 5 days ago with zero unanswered emails indicates a healthy, trust-based relationship.' },
-      ],
-      _source: 'salesforce',
-      crm: { status: 'Connected', lastSync: now },
-      email: { status: 'Connected', pending: 0, lastSync: now },
-      calendar: { status: 'Connected', lastSync: now },
-      productUsage: { status: 'Connected', trend: 'up', lastSync: now },
-      support: { status: 'Connected', lastSync: now },
-      recentActivity: [
-        { time: '5 days ago', desc: 'QBR completed — positive sentiment, expansion interest noted', by: 'Alex Torres', type: 'Meeting' },
-        { time: '1 week ago', desc: 'Usage growth 12% — expansion flag set', by: 'Agent', type: 'AI' },
-        { time: '2 weeks ago', desc: 'Success story shared with LogiPro team', by: 'Alex Torres', type: 'Email' },
-      ],
-    },
-    {
-      id: nextId++, name: 'FinCore Ltd', owner: 'Rachel Green', industry: 'Financial Services',
-      arr: 210000, mrr: 17500,
-      renewal: getRelativeDate(90), daysToRenewal: 90,
-      lastMeeting: '3 days ago', unansweredEmails: 0, noNextStep: false,
-      usageChange: 18, evidence: 1,
-      riskScore: 28, riskLevel: 'Low', status: 'Low',
-      aiConfidence: 88,
-      aiReasoning: 'FinCore is one of the healthiest accounts in the portfolio — 18% usage growth, met 3 days ago, and zero outstanding communication gaps. This $210K ARR enterprise account is deeply embedded and represents a strong expansion opportunity. Financial services firms with growing usage at this ARR level are prime candidates for enterprise tier upgrades or compliance module additions.',
-      signals: ['18% product usage growth — platform deeply embedded', 'Met 3 days ago — executive relationship is strong', '90-day renewal window — ideal time to plan expansion'],
-      nextAction: 'Propose enterprise tier upgrade and compliance reporting module in the next executive review',
-      emailDraft: 'Subject: FinCore Q3 strategy — exciting update\n\nHi Catherine,\n\nFollowing our great conversation on Tuesday, I wanted to share that your usage has grown 18% over the last month — truly impressive adoption. I\'d love to show you how our enterprise compliance module could amplify these results even further.\n\nCould we schedule 45 minutes before end of quarter?\n\nBest,\nRachel Green',
-      expansionOpportunity: 'Enterprise compliance and audit reporting module — critical for financial services regulatory requirements at this ARR level',
-      urgency: 'This Month',
-      predictedOutcome: 'Renewal probability 95%+. Strong expansion candidate — potential to grow ARR by $40-60K with compliance module.',
-      riskBreakdown: [
-        { factor: 'Positive usage growth', points: -5, value: '+18%' },
-      ],
-      actionPlan: [
-        { week: 'Week 1-2', action: 'Prepare enterprise tier proposal with compliance module demo', owner: 'Rachel Green', goal: 'Build business case for $250K ARR' },
-        { week: 'Week 3-4', action: 'Executive presentation — ROI summary and expansion roadmap', owner: 'Rachel Green', goal: 'Get stakeholder buy-in for expansion' },
-        { week: 'Month 2', action: '30-day compliance module pilot with dedicated implementation support', owner: 'Rachel Green', goal: 'Demonstrate audit reporting value' },
-        { week: 'Month 3', action: 'Close expansion and renewal bundle', owner: 'Rachel Green', goal: 'Grow ARR from $210K to $250K+' },
-      ],
-      riskDrivers: [
-        { driver: 'Strong Usage Growth', impact: 'Low', explanation: '+18% growth at enterprise ARR indicates platform is core to FinCore\'s operations — extremely low churn risk.' },
-        { driver: 'Executive Engagement', impact: 'Low', explanation: 'Meeting 3 days ago with active executive sponsorship is the strongest retention signal possible.' },
-        { driver: 'Compliance Opportunity', impact: 'Low', explanation: 'Financial services firms at this ARR level almost always have compliance requirements that create natural expansion vectors.' },
-      ],
-      _source: 'salesforce',
-      crm: { status: 'Connected', lastSync: now },
-      email: { status: 'Connected', pending: 0, lastSync: now },
-      calendar: { status: 'Connected', lastSync: now },
-      productUsage: { status: 'Connected', trend: 'up', lastSync: now },
-      support: { status: 'Connected', lastSync: now },
-      recentActivity: [
-        { time: '3 days ago', desc: 'Executive QBR — 18% usage growth presented, expansion discussed', by: 'Rachel Green', type: 'Meeting' },
-        { time: '5 days ago', desc: 'Expansion opportunity flagged — compliance module fit', by: 'Agent', type: 'AI' },
-        { time: '2 weeks ago', desc: 'NPS survey completed — score 9/10', by: 'System', type: 'NPS' },
-      ],
-    },
-    {
-      id: nextId++, name: 'BuildRight Construction', owner: 'Chris Murphy', industry: 'Construction Technology',
-      arr: 33000, mrr: 2750,
-      renewal: getRelativeDate(115), daysToRenewal: 115,
-      lastMeeting: '7 days ago', unansweredEmails: 0, noNextStep: false,
-      usageChange: 22, evidence: 1,
-      riskScore: 22, riskLevel: 'Low', status: 'Low',
-      aiConfidence: 84,
-      aiReasoning: 'BuildRight is a healthy, growing SMB account with 22% usage growth — one of the strongest adoption curves in the SMB segment. Met last week, zero unanswered emails, and 115 days to renewal. This account is an ideal candidate for a project management premium module given the construction industry\'s need for site coordination and compliance tracking.',
-      signals: ['22% usage growth — highest adoption rate in SMB cohort', 'Met last week — active and healthy relationship', '115 days to renewal — strong pipeline security'],
-      nextAction: 'Pitch project management premium add-on — usage growth and industry fit make this a high-confidence upsell',
-      emailDraft: 'Subject: BuildRight team performance — impressive growth!\n\nHi Tyler,\n\nJust wanted to follow up from our call last week — your team\'s usage has grown 22% this past month, which is genuinely impressive. I\'d love to show you our project management premium features that are specifically built for construction workflows.\n\nDown for a quick demo?\n\nBest,\nChris Murphy',
-      expansionOpportunity: 'Project management premium module — strong fit for construction site coordination and compliance tracking workflows',
-      urgency: 'This Month',
-      predictedOutcome: 'Renewal probability 97%+. Excellent expansion candidate with premium module — potential $8-12K ARR increase.',
-      riskBreakdown: [
-        { factor: 'Positive usage growth', points: -5, value: '+22%' },
-      ],
-      actionPlan: [
-        { week: 'Week 1-2', action: 'Send project management module overview tailored to construction workflows', owner: 'Chris Murphy', goal: 'Generate interest and book demo' },
-        { week: 'Week 3-4', action: 'Live demo of site coordination and compliance tracking features', owner: 'Chris Murphy', goal: 'Show immediate value for field teams' },
-        { week: 'Month 2', action: 'Free 30-day pilot with field team lead as internal champion', owner: 'Chris Murphy', goal: 'Drive adoption before commercial discussion' },
-        { week: 'Month 3', action: 'Close expansion and start early renewal conversation', owner: 'Chris Murphy', goal: 'Grow ARR from $33K to $42K' },
-      ],
-      riskDrivers: [
-        { driver: 'Exceptional Usage Growth', impact: 'Low', explanation: '+22% growth in construction tech is exceptional — this team has fully adopted the platform into daily workflows.' },
-        { driver: 'Healthy Relationship', impact: 'Low', explanation: 'Meeting last week with zero email gaps confirms active engagement and mutual trust.' },
-        { driver: 'SMB Expansion Potential', impact: 'Low', explanation: 'SMB accounts with strong usage growth are the best candidates for premium module expansion at relatively low sales cost.' },
-      ],
-      _source: 'hubspot',
-      crm: { status: 'Not connected', lastSync: null },
-      email: { status: 'Connected', pending: 0, lastSync: now },
-      calendar: { status: 'Connected', lastSync: now },
-      productUsage: { status: 'Connected', trend: 'up', lastSync: now },
-      support: { status: 'Not connected', lastSync: null },
-      recentActivity: [
-        { time: '7 days ago', desc: 'Check-in call — team very happy, usage growing', by: 'Chris Murphy', type: 'Meeting' },
-        { time: '1 week ago', desc: 'Usage growth 22% — expansion opportunity flagged', by: 'Agent', type: 'AI' },
-        { time: '2 weeks ago', desc: 'Onboarding completed successfully', by: 'System', type: 'Onboarding' },
-      ],
-    },
+  // Utility: random integer between min and max (inclusive)
+  const rnd = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min
+  // Weighted pick from array
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)]
+
+  // ── Static company profiles (identity stays the same, signals change) ──────
+  const COMPANIES = [
+    { name: 'TechNova Inc',          owner: 'Sarah Chen',    industry: 'SaaS / Technology',         arr: 145000 },
+    { name: 'RetailEdge Co',         owner: 'Marcus Johnson',industry: 'Retail & E-Commerce',        arr: 67000 },
+    { name: 'GrowthStack SaaS',      owner: 'Priya Patel',   industry: 'Marketing Technology',       arr: 54000 },
+    { name: 'MediTrack Health',      owner: 'David Kim',     industry: 'Healthcare Technology',      arr: 88000 },
+    { name: 'CloudBase Systems',     owner: 'Emma Wilson',   industry: 'Cloud Infrastructure',       arr: 98000 },
+    { name: 'LogiPro Corp',          owner: 'Alex Torres',   industry: 'Logistics & Supply Chain',   arr: 76000 },
+    { name: 'FinCore Ltd',           owner: 'Rachel Green',  industry: 'Financial Services',         arr: 210000 },
+    { name: 'BuildRight Construction',owner: 'Chris Murphy', industry: 'Construction Technology',    arr: 33000 },
+    { name: 'NexaAI Labs',           owner: 'Aisha Patel',   industry: 'Artificial Intelligence',    arr: 175000 },
+    { name: 'SwiftShip Logistics',   owner: 'Tom Bradley',   industry: 'Logistics & Supply Chain',   arr: 42000 },
   ]
 
-  customers.push(...seedCustomers)
-  nextId = seedCustomers.length + 1
-  console.log(`✅ Seeded ${seedCustomers.length} demo customers`)
+  // ── Dynamic signal generation per company ────────────────────────────────────
+  // Build a guaranteed mix of risk profiles: 3 High, 4 Medium, 3 Low
+  // Then shuffle so different companies get different profiles each sync
+  const profiles = [
+    'high', 'high', 'high',
+    'medium', 'medium', 'medium', 'medium',
+    'low', 'low', 'low',
+  ]
+  // Fisher-Yates shuffle — every sync produces a different assignment
+  for (let i = profiles.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [profiles[i], profiles[j]] = [profiles[j], profiles[i]]
+  }
+
+  COMPANIES.forEach((co, idx) => {
+    const profile = profiles[idx]
+
+    // Signals vary based on profile
+    let usageChange, daysToRenewal, lastActivityDays, unansweredEmails, noNextStep, supportTickets, npsScore
+    if (profile === 'high') {
+      usageChange      = rnd(-50, -20)
+      daysToRenewal    = rnd(5, 35)
+      lastActivityDays = rnd(20, 45)
+      unansweredEmails = rnd(2, 5)
+      noNextStep       = true
+      supportTickets   = rnd(2, 6)
+      npsScore         = rnd(1, 5)
+    } else if (profile === 'medium') {
+      usageChange      = rnd(-18, -3)
+      daysToRenewal    = rnd(30, 75)
+      lastActivityDays = rnd(10, 25)
+      unansweredEmails = rnd(0, 2)
+      noNextStep       = Math.random() < 0.4
+      supportTickets   = rnd(0, 3)
+      npsScore         = rnd(5, 7)
+    } else {
+      usageChange      = rnd(3, 30)
+      daysToRenewal    = rnd(60, 120)
+      lastActivityDays = rnd(1, 10)
+      unansweredEmails = 0
+      noNextStep       = false
+      supportTickets   = rnd(0, 1)
+      npsScore         = rnd(8, 10)
+    }
+
+    // Run the real rule-based risk engine for score + breakdown
+    const merged = {
+      name: co.name,
+      owner: co.owner,
+      industry: co.industry,
+      arr: co.arr,
+      usageDrop: usageChange,
+      daysToRenewal,
+      lastActivityDays,
+      contactReplied: unansweredEmails === 0,
+      contactLastEmailDays: lastActivityDays,
+      emailOpens: unansweredEmails === 0 ? rnd(1, 10) : 0,
+      meetingBooked: lastActivityDays < 14,
+      dealStage: profile === 'high' ? 'Churn Risk' : profile === 'medium' ? 'Renewal Risk' : 'Qualified',
+      usageScore: profile === 'high' ? rnd(10, 35) : profile === 'medium' ? rnd(36, 65) : rnd(66, 95),
+      npsScore,
+      supportCases: supportTickets,
+      accountHealth: profile === 'high' ? 'Critical' : profile === 'medium' ? 'At Risk' : 'Healthy',
+      contactName: co.name,
+      contactTitle: 'Decision Maker',
+    }
+
+    const riskResult = calculateRiskScore(merged)
+
+    // Build AI reasoning based on real signals
+    const topFactors = riskResult.breakdown.slice(0, 2).map(b => b.factor).join(' and ')
+    const churnPct = riskResult.score >= 80 ? rnd(75, 95)
+      : riskResult.score >= 60 ? rnd(45, 74)
+      : riskResult.score >= 40 ? rnd(20, 44)
+      : rnd(5, 19)
+
+    const reasoning = profile === 'high'
+      ? `${co.name} is showing severe pre-churn signals — ${usageChange}% product usage decline, ${lastActivityDays} days without engagement, and renewal in just ${daysToRenewal} days. With ${unansweredEmails} unanswered emails and no next step in the CRM, this account has gone dark. Industry data shows this trifecta predicts churn in 78% of cases.`
+      : profile === 'medium'
+      ? `${co.name} has moderate risk signals that require attention — ${usageChange}% usage decline and ${lastActivityDays} days since last contact. Renewal is ${daysToRenewal} days away, which is still within the intervention window. Proactive outreach now can prevent this from escalating to high risk.`
+      : `${co.name} is in strong health with ${usageChange > 0 ? '+' : ''}${usageChange}% usage trend and active engagement ${lastActivityDays} days ago. Renewal in ${daysToRenewal} days provides ample time for an expansion conversation. This is a prime candidate for upsell.`
+
+    const nextAction = profile === 'high'
+      ? pick([
+          `Escalate to VP-level immediately — call ${co.owner} and book emergency EBR`,
+          `CEO-to-CEO call today — ${daysToRenewal} days to renewal, account has gone dark`,
+          `Send personal video message from ${co.owner} — break the silence within 24 hours`,
+        ])
+      : profile === 'medium'
+      ? pick([
+          `Schedule QBR within 7 days — present ROI data and address usage decline`,
+          `Send health check email today and propose a 30-minute call this week`,
+          `Book product review session — identify blockers causing ${Math.abs(usageChange)}% usage drop`,
+        ])
+      : pick([
+          `Propose expansion module in next QBR — usage growth supports the pitch`,
+          `Schedule renewal discussion early — strong account health enables premium pricing`,
+          `Share case study and introduce premium add-on — ${usageChange}% growth shows high engagement`,
+        ])
+
+    const expansionOpportunity = profile === 'low'
+      ? pick([
+          `Premium analytics module — strong usage growth at ${co.arr > 100000 ? 'enterprise' : 'mid-market'} ARR suggests readiness`,
+          `Advanced integrations package — ${co.industry} accounts at this stage typically expand 20-30% ARR`,
+          `Dedicated CSM + priority support tier — healthy account, ideal for annual plan upgrade`,
+          'None at this time',
+        ])
+      : 'None at this time'
+
+    const urgency = riskResult.score >= 75 ? 'Immediate' : riskResult.score >= 50 ? 'This Week' : 'This Month'
+    const riskLevel = riskResult.level
+    const riskScore = riskResult.score
+
+    // Email draft
+    const emailDraft = `Subject: ${riskLevel === 'High' ? 'Urgent: ' : ''}Checking in — ${co.name}\n\nHi ${co.name.split(' ')[0]} Team,\n\n${
+      riskLevel === 'High'
+        ? `I noticed we haven't connected in ${lastActivityDays} days and your renewal is coming up in ${daysToRenewal} days. I'd love to schedule an urgent call to make sure we're aligned.`
+        : riskLevel === 'Medium'
+        ? `I wanted to proactively reach out and schedule a health check call. I have some insights on your usage trends that I think would be valuable to discuss.`
+        : `Great news — your team's usage has grown ${usageChange}% this month! I'd love to show you some advanced features that could amplify these results even further.`
+    }\n\nWould you have time this week?\n\nBest,\n${co.owner}`
+
+    const rec = {
+      id: nextId++,
+      name: co.name,
+      company: co.name,
+      owner: co.owner,
+      industry: co.industry,
+      arr: co.arr,
+      mrr: Math.round(co.arr / 12),
+      email: `contact@${co.name.toLowerCase().replace(/[^a-z]/g, '')}.com`,
+      jobTitle: 'Decision Maker',
+      renewal: getRelativeDate(daysToRenewal),
+      daysToRenewal,
+      lastMeeting: lastActivityDays === 0 ? 'Today' : lastActivityDays === 1 ? '1 day ago' : `${lastActivityDays} days ago`,
+      unansweredEmails,
+      noNextStep,
+      usageChange,
+      evidence: riskResult.breakdown.length,
+      dealStage: merged.dealStage,
+      _crmId: `DEMO-${co.name.replace(/\s/g, '-')}`,
+      _source: 'Demo Data',
+      // Risk
+      riskScore,
+      riskLevel,
+      status: riskLevel,
+      riskBreakdown: riskResult.breakdown,
+      // AI
+      aiReasoning: reasoning,
+      aiConfidence: Math.max(55, 90 - riskResult.breakdown.length * 2),
+      signals: riskResult.breakdown.slice(0, 3).map(b => `${b.factor}: ${b.value}`),
+      riskDrivers: riskResult.breakdown.slice(0, 3).map(b => ({
+        driver: b.factor,
+        impact: b.points >= 15 ? 'High' : b.points >= 8 ? 'Medium' : 'Low',
+        explanation: `${b.factor} contributes ${b.points > 0 ? '+' : ''}${b.points} pts to the risk score (${b.value}).`,
+      })),
+      actionPlan: [
+        { week: 'Week 1-2', action: nextAction, owner: co.owner, goal: riskLevel === 'High' ? 'Re-establish contact and stop churn clock' : riskLevel === 'Medium' ? 'Uncover blockers and re-engage' : 'Open expansion conversation' },
+        { week: 'Week 3-4', action: riskLevel === 'High' ? 'Emergency product review and success plan' : riskLevel === 'Medium' ? 'Present ROI report and renewal proposal' : 'Demo premium features with ROI case study', owner: co.owner, goal: riskLevel === 'High' ? 'Diagnose root cause of disengagement' : riskLevel === 'Medium' ? 'Confirm value ahead of renewal' : 'Generate interest in expansion' },
+        { week: 'Month 2', action: riskLevel === 'High' ? 'Weekly check-ins and usage recovery plan' : riskLevel === 'Medium' ? 'Product health check and feature training' : '30-day pilot of premium module', owner: co.owner, goal: riskLevel === 'High' ? 'Reverse usage decline' : riskLevel === 'Medium' ? 'Drive usage back above baseline' : 'Prove expansion value' },
+        { week: 'Month 3', action: 'Renewal close with updated success metrics', owner: co.owner, goal: `Secure ${riskLevel === 'Low' ? 'renewal with expansion' : 'renewal'} at $${(co.arr / 1000).toFixed(0)}K ARR` },
+      ],
+      nextAction,
+      emailDraft,
+      expansionOpportunity,
+      predictedOutcome: `${churnPct}% ${riskLevel === 'Low' ? 'renewal' : 'churn'} probability. ${riskLevel === 'High' ? `$${(co.arr / 1000).toFixed(0)}K ARR at immediate risk.` : riskLevel === 'Medium' ? 'Intervention within 2 weeks recommended.' : 'Strong candidate for expansion.'}`,
+      urgency,
+      llmError: null,
+      crm: { status: 'Connected', lastSync: now, source: 'Demo' },
+      email: { status: 'Connected', pending: unansweredEmails, lastSync: now },
+      calendar: { status: 'Connected', lastSync: now },
+      productUsage: { status: 'Connected', trend: usageChange >= 0 ? 'up' : 'down', lastSync: now },
+      support: { status: supportTickets > 0 ? 'Connected' : 'Not connected', lastSync: supportTickets > 0 ? now : null },
+      recentActivity: [
+        { time: new Date().toLocaleString(), desc: `AI risk analysis complete — score ${riskScore}/100 (${riskLevel})`, by: 'Agent', type: 'AI' },
+        { time: new Date().toLocaleString(), desc: `Usage trend: ${usageChange > 0 ? '+' : ''}${usageChange}% | Last contact: ${lastActivityDays} days ago`, by: 'System', type: 'Usage' },
+        { time: new Date().toLocaleString(), desc: urgency === 'Immediate' ? `🚨 Immediate action required — renewal in ${daysToRenewal} days` : `Next action: ${nextAction.slice(0, 60)}...`, by: 'Agent', type: 'AI' },
+      ],
+    }
+
+    customers.push(rec)
+  })
+
+  console.log(`✅ Seeded ${customers.length} demo customers with fresh dynamic signals`)
 }
 
 // ─── Auto-find free port if preferred port is busy ───────────────────────────
 function startServer(port) {
-  const server = app.listen(port, () => {
+  const server = app.listen(port, async () => {
     const aiEnabled = process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here'
     console.log(`RevOps AI backend running on http://localhost:${port}`)
     console.log(`AI Mode: ${aiEnabled ? '✅ Groq LLM enabled' : '⚠️  Fallback mode'}`)
     // Write actual port to a temp file so frontend can read it
     require('fs').writeFileSync('.port', String(port))
-    seedDemoData()
+
+    // Auto-initialize MySQL database and tables
+    try {
+      const { initDb } = require('./scripts/init-db')
+      await initDb()
+    } catch (e) {
+      console.warn('⚠️  MySQL auto-init skipped:', e.message)
+    }
+
+    // Load persisted customers from disk first, then seed demo data if empty
+    const loaded = loadFromDisk()
+    if (!loaded) {
+      customers = []
+      nextId = 1
+      seedDemoData()
+    }
   })
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.log(`⚠️  Port ${port} busy — trying ${port + 1}...`)
-      startServer(port + 1)
+      startServer(parseInt(port, 10) + 1)
     } else {
       throw err
     }
   })
 }
 
-startServer(PORT)
+startServer(parseInt(PORT, 10) || 4001)

@@ -1,18 +1,19 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import axios from 'axios'
 import { Bot, Zap, CheckCircle, Clock, AlertTriangle, TrendingUp, Mail, Database, RefreshCw } from 'lucide-react'
 
 const API = 'http://localhost:4001/api'
 
-export default function AIActionCenter() {
-  const [customers, setCustomers] = useState([])
+export default function AIActionCenter({ customers = [], dataLoading }) {
   const [analyzing, setAnalyzing] = useState(false)
   const [analysisResults, setAnalysisResults] = useState([])
   const [completed, setCompleted] = useState([])
 
-  useEffect(() => {
-    axios.get(`${API}/customers`).then(r => setCustomers(r.data))
-  }, [])
+  if (dataLoading) return (
+    <div className="flex items-center justify-center h-full">
+      <div className="text-slate-400 animate-pulse text-sm">Loading AI Action Center...</div>
+    </div>
+  )
 
   const runAnalysis = async () => {
     setAnalyzing(true)

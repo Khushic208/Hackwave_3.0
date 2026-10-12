@@ -1,28 +1,19 @@
-import React, { useEffect, useState } from 'react'
-import axios from 'axios'
+import React, { useState } from 'react'
 import { Search, Filter, ArrowUpRight, ArrowDownRight, ChevronRight, Users } from 'lucide-react'
 import RiskBadge from '../components/RiskBadge'
 
-const API = 'http://localhost:4001/api'
-
-export default function Customers({ onSelectCustomer }) {
-  const [customers, setCustomers] = useState([])
+export default function Customers({ onSelectCustomer, customers = [], dataLoading }) {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    axios.get(`${API}/customers`).then(r => setCustomers(r.data)).finally(() => setLoading(false))
-  }, [])
 
   const filtered = customers.filter(c => {
     const matchSearch = c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.owner.toLowerCase().includes(search.toLowerCase())
+      (c.owner || '').toLowerCase().includes(search.toLowerCase())
     const matchFilter = filter === 'All' || c.riskLevel === filter
     return matchSearch && matchFilter
   })
 
-  if (loading) return <div className="text-slate-400 text-sm animate-pulse">Loading customers...</div>
+  if (dataLoading) return <div className="text-slate-400 text-sm animate-pulse">Loading customers...</div>
 
   if (filtered.length === 0) return (
     <div className="space-y-5">

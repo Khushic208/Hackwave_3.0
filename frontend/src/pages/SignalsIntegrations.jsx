@@ -8,6 +8,9 @@ import {
 
 const API = 'http://localhost:4001/api'
 
+const STORAGE_KEY = 'revops_sync_results'
+const STORAGE_META_KEY = 'revops_sync_meta'
+
 export default function SignalsIntegrations() {
   const [syncing, setSyncing] = useState(false)
   const [synced, setSynced] = useState(false)
@@ -16,6 +19,28 @@ export default function SignalsIntegrations() {
   const [error, setError] = useState(null)
   const [status, setStatus] = useState(null)
   const [syncLog, setSyncLog] = useState([])
+  const [lastSyncTime, setLastSyncTime] = useState(null)
+
+  // Restore persisted sync results on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      const meta = localStorage.getItem(STORAGE_META_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setResults(parsed)
+          setSynced(true)
+        }
+      }
+      if (meta) {
+        const m = JSON.parse(meta)
+        setLastSyncTime(m.syncedAt || null)
+      }
+    } catch (e) {
+      // ignore parse errors
+    }
+  }, [])
 
   // Check integration status on load
   useEffect(() => {
@@ -34,6 +59,11 @@ export default function SignalsIntegrations() {
     setError(null)
     setSyncLog([])
 
+    // Clear previous sync data immediately — fresh sync will replace it
+    localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(STORAGE_META_KEY)
+    setLastSyncTime(null)
+
     try {
       addLog('Connecting to your data sources...')
       addLog('Fetching contacts, deals, and activity...')
@@ -51,8 +81,18 @@ export default function SignalsIntegrations() {
       addLog('Running AI risk analysis on each customer...')
       addLog(`✅ Analysis complete — ${res.data.total} customers scored`)
 
-      setResults(res.data.results || [])
+      const newResults = res.data.results || []
+      const syncedAt = new Date().toLocaleString()
+
+      // Persist to localStorage so data survives page navigation & refresh
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(newResults))
+        localStorage.setItem(STORAGE_META_KEY, JSON.stringify({ syncedAt, total: newResults.length }))
+      } catch (e) { /* storage full or blocked — ignore */ }
+
+      setResults(newResults)
       setSynced(true)
+      setLastSyncTime(syncedAt)
       window.dispatchEvent(new Event('crm-synced'))
     } catch (err) {
       const msg = err.response?.data?.error || err.message
@@ -61,6 +101,16 @@ export default function SignalsIntegrations() {
     }
 
     setSyncing(false)
+  }
+
+  const clearSync = () => {
+    localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(STORAGE_META_KEY)
+    setResults([])
+    setSynced(false)
+    setLastSyncTime(null)
+    setSyncLog([])
+    setError(null)
   }
 
   const highCount = results.filter(r => r.riskLevel === 'High').length
@@ -130,15 +180,28 @@ export default function SignalsIntegrations() {
             </div>
           </div>
 
-          <button
-            onClick={runSync}
-            disabled={syncing}
-            className="flex items-center gap-2 px-5 py-2.5 bg-[#FF7A59] hover:bg-[#e8684a] disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors flex-shrink-0"
-          >
-            {syncing
-              ? <><Loader size={14} className="animate-spin"/> Syncing...</>
-              : <><RefreshCw size={14}/> {synced ? 'Re-sync & Analyze' : 'Sync & Analyze with AI'}</>}
-          </button>
+          <div className="flex flex-col items-end gap-2 flex-shrink-0">
+            <button
+              onClick={runSync}
+              disabled={syncing}
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#FF7A59] hover:bg-[#e8684a] disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+            >
+              {syncing
+                ? <><Loader size={14} className="animate-spin"/> Syncing...</>
+                : <><RefreshCw size={14}/> {synced ? 'Re-sync & Analyze' : 'Sync & Analyze with AI'}</>}
+            </button>
+            {synced && lastSyncTime && (
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] text-slate-500">Last synced: {lastSyncTime}</span>
+                <button
+                  onClick={clearSync}
+                  className="text-[10px] text-red-400/60 hover:text-red-400 transition-colors underline"
+                >
+                  Clear data
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Sync log */}

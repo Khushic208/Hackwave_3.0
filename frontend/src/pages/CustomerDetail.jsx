@@ -14,7 +14,7 @@ const API = 'http://localhost:4001/api'
 
 const TABS = ['Overview', 'Signals', 'AI Analysis', 'Actions', 'History']
 
-export default function CustomerDetail({ customerId, onBack }) {
+export default function CustomerDetail({ customerId, onBack, customers = [] }) {
   const [customer, setCustomer] = useState(null)
   const [tab, setTab] = useState('Overview')
   const [loading, setLoading] = useState(true)
@@ -26,10 +26,20 @@ export default function CustomerDetail({ customerId, onBack }) {
   useEffect(() => {
     if (!customerId) return
     setLoading(true)
+
+    // First try to find in the already-loaded customers list (no extra API call)
+    const fromStore = customers.find(c => c.id === customerId || c.id === parseInt(customerId))
+    if (fromStore) {
+      setCustomer(fromStore)
+      setLoading(false)
+      return
+    }
+
+    // Fallback: fetch individually from backend
     axios.get(`${API}/customers/${customerId}`)
       .then(r => setCustomer(r.data))
       .finally(() => setLoading(false))
-  }, [customerId])
+  }, [customerId, customers])
 
   const handleCopyEmail = () => {
     if (customer?.emailDraft) {

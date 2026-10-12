@@ -1,21 +1,8 @@
-import React, { useEffect, useState } from 'react'
-import axios from 'axios'
+import React from 'react'
 import { AlertTriangle, TrendingUp, DollarSign, Calendar, ChevronRight, Shield } from 'lucide-react'
 
-const API = 'http://localhost:4001/api'
-
-export default function RiskOpportunities() {
-  const [customers, setCustomers] = useState([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    axios.get(`${API}/customers`)
-      .then(res => setCustomers(res.data))
-      .catch(() => setCustomers([]))
-      .finally(() => setLoading(false))
-  }, [])
-
-  if (loading) {
+export default function RiskOpportunities({ customers = [], dataLoading }) {
+  if (dataLoading) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-slate-400 animate-pulse text-sm">Loading risk data...</div>
@@ -219,7 +206,7 @@ export default function RiskOpportunities() {
       </div>
 
       {/* Empty state if no customers at all */}
-      {customers.length === 0 && !loading && (
+      {customers.length === 0 && !dataLoading && (
         <div className="flex flex-col items-center justify-center py-20 bg-[#112240] rounded-xl border border-[#1e2d3d] text-slate-500">
           <AlertTriangle size={40} className="mb-3 opacity-30" />
           <p className="text-sm font-medium text-slate-400">No customer data available</p>

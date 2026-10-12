@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react'
-import axios from 'axios'
+import React from 'react'
 import { PieChart, Pie, Cell } from 'recharts'
 import {
   Users, ShieldAlert, DollarSign, Calendar, ArrowUpRight, ArrowDownRight,
@@ -7,56 +6,19 @@ import {
 } from 'lucide-react'
 import RiskBadge from '../components/RiskBadge'
 
-const API = 'http://localhost:4001/api'
-
-const RISK_COLORS = { 'High Risk': '#ef4444', 'Medium Risk': '#f59e0b', 'Low Risk': '#22c55e' }
 const CONFIDENCE_COLORS = { High: 'text-green-400', Medium: 'text-yellow-400', Low: 'text-red-400' }
 
-export default function Dashboard({ onSelectCustomer }) {
-  const [stats, setStats] = useState(null)
-  const [customers, setCustomers] = useState([])
-  const [revenueExposure, setRevenueExposure] = useState([])
-  const [signalCoverage, setSignalCoverage] = useState(null)
-  const [opportunities, setOpportunities] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-
-  const fetchData = () => {
-    return Promise.all([
-      axios.get(`${API}/stats`),
-      axios.get(`${API}/customers`),
-      axios.get(`${API}/revenue-exposure`),
-      axios.get(`${API}/signal-coverage`),
-      axios.get(`${API}/opportunities`),
-    ]).then(([s, c, re, sc, op]) => {
-      setStats(s.data)
-      setCustomers(c.data)
-      setRevenueExposure(re.data)
-      setSignalCoverage(sc.data)
-      setOpportunities(op.data)
-    })
-  }
-
-  useEffect(() => {
-    fetchData().finally(() => setLoading(false))
-  }, [])
-
-  // Listen for CRM sync events from SignalsIntegrations
-  useEffect(() => {
-    const handleCrmSynced = () => {
-      setRefreshing(true)
-      fetchData().finally(() => setRefreshing(false))
-    }
-    window.addEventListener('crm-synced', handleCrmSynced)
-    return () => window.removeEventListener('crm-synced', handleCrmSynced)
-  }, [])
-
-  const handleRefresh = () => {
-    setRefreshing(true)
-    fetchData().finally(() => setRefreshing(false))
-  }
-
-  if (loading) return (
+export default function Dashboard({
+  onSelectCustomer,
+  customers = [],
+  stats,
+  revenueExposure = [],
+  signalCoverage,
+  opportunities = [],
+  dataLoading,
+  refreshAll,
+}) {
+  if (dataLoading) return (
     <div className="flex items-center justify-center h-full">
       <div className="text-slate-400 animate-pulse text-sm">Loading dashboard...</div>
     </div>
@@ -65,9 +27,9 @@ export default function Dashboard({ onSelectCustomer }) {
   if (!stats) return null
 
   const riskMix = [
-    { name: 'High risk', value: stats.highRisk, color: '#f43f5e' },
+    { name: 'High risk',  value: stats.highRisk, color: '#f43f5e' },
     { name: 'Medium risk', value: customers.filter(c => c.riskLevel === 'Medium').length, color: '#f59e0b' },
-    { name: 'Healthy', value: customers.filter(c => c.riskLevel === 'Low').length, color: '#10b981' },
+    { name: 'Healthy',    value: customers.filter(c => c.riskLevel === 'Low').length, color: '#10b981' },
   ]
   const totalAccounts = riskMix.reduce((sum, item) => sum + item.value, 0)
 
@@ -81,12 +43,11 @@ export default function Dashboard({ onSelectCustomer }) {
           <p className="text-slate-500 mt-2">A focused view of account health, exposure and upcoming renewals.</p>
         </div>
         <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-1.5 text-xs text-indigo-700 hover:text-indigo-800 bg-white border border-slate-200 hover:border-indigo-300 hover:shadow-sm rounded-xl px-3 py-2 transition-all disabled:opacity-50"
+          onClick={refreshAll}
+          className="flex items-center gap-1.5 text-xs text-indigo-700 hover:text-indigo-800 bg-white border border-slate-200 hover:border-indigo-300 hover:shadow-sm rounded-xl px-3 py-2 transition-all"
         >
-          <Bot size={13} className={refreshing ? 'animate-spin' : ''} />
-          {refreshing ? 'Refreshing...' : 'Refresh'}
+          <Bot size={13} />
+          Refresh
         </button>
       </div>
 
@@ -100,7 +61,7 @@ export default function Dashboard({ onSelectCustomer }) {
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Risk Trend */}
+        {/* Risk Mix Donut */}
         <div className="lg:col-span-2 dashboard-panel rounded-2xl border border-slate-200 p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -141,7 +102,7 @@ export default function Dashboard({ onSelectCustomer }) {
               })}
               <div className="risk-mix-footnote">
                 <span className="trend-status-dot" />
-                No change in the last 7 days
+                Live data from last sync
               </div>
             </div>
           </div>
@@ -149,21 +110,18 @@ export default function Dashboard({ onSelectCustomer }) {
 
         {/* Revenue Exposure + Signal Coverage */}
         <div className="flex flex-col gap-4">
-          {/* Revenue Exposure */}
           <div className="bg-[#112240] rounded-xl border border-[#1e2d3d] p-5 flex-1">
             <h3 className="text-sm font-semibold text-white mb-3">Revenue Exposure</h3>
             <div className="flex items-center gap-3">
               <div className="relative">
                 <PieChart width={90} height={90}>
                   <Pie data={revenueExposure} cx={40} cy={40} innerRadius={28} outerRadius={42} dataKey="value" startAngle={90} endAngle={-270}>
-                    {revenueExposure.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} />
-                    ))}
+                    {revenueExposure.map((entry, i) => <Cell key={i} fill={entry.color} />)}
                   </Pie>
                 </PieChart>
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="text-center">
-                    <div className="text-xs font-bold text-white">$480K</div>
+                    <div className="text-xs font-bold text-white">${stats.revenueAtRisk}</div>
                     <div className="text-[9px] text-slate-400">at risk</div>
                   </div>
                 </div>
@@ -182,7 +140,6 @@ export default function Dashboard({ onSelectCustomer }) {
             </div>
           </div>
 
-          {/* Signal Coverage */}
           {signalCoverage && (
             <div className="bg-[#112240] rounded-xl border border-[#1e2d3d] p-5 flex-1">
               <h3 className="text-sm font-semibold text-white mb-3">Signal Coverage</h3>
@@ -215,7 +172,7 @@ export default function Dashboard({ onSelectCustomer }) {
         </div>
       </div>
 
-      {/* Customer Risk Overview */}
+      {/* Customer Risk Overview table */}
       <div className="bg-[#112240] rounded-xl border border-[#1e2d3d] overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#1e2d3d]">
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
@@ -244,7 +201,7 @@ export default function Dashboard({ onSelectCustomer }) {
                     <div className="flex flex-col items-center gap-2 text-slate-500">
                       <Users size={32} className="opacity-30" />
                       <p className="text-sm font-medium text-slate-400">No customers yet</p>
-                      <p className="text-xs">Connect Salesforce or HubSpot in <span className="text-blue-400">Signals &amp; Integrations</span> to populate data</p>
+                      <p className="text-xs">Connect your CRM in <span className="text-blue-400">Signals &amp; Integrations</span> to populate data</p>
                     </div>
                   </td>
                 </tr>
@@ -264,9 +221,7 @@ export default function Dashboard({ onSelectCustomer }) {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-slate-400 text-xs">{c.owner}</td>
-                    <td className="px-4 py-3">
-                      <RiskScore score={c.riskScore} level={c.riskLevel} />
-                    </td>
+                    <td className="px-4 py-3"><RiskScore score={c.riskScore} level={c.riskLevel} /></td>
                     <td className="px-4 py-3 text-slate-300 text-xs">{c.renewal}</td>
                     <td className="px-4 py-3">
                       <span className={`text-xs font-medium flex items-center gap-1 ${c.usageChange >= 0 ? 'text-green-400' : 'text-red-400'}`}>
@@ -287,7 +242,6 @@ export default function Dashboard({ onSelectCustomer }) {
 
       {/* Bottom Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Top Revenue Opportunities */}
         <div className="bg-[#112240] rounded-xl border border-[#1e2d3d] p-5">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-white flex items-center gap-2">
@@ -295,35 +249,38 @@ export default function Dashboard({ onSelectCustomer }) {
             </h3>
             <button className="text-xs text-blue-400 hover:text-blue-300">View All</button>
           </div>
-          <div className="space-y-3">
-            {opportunities.map(op => (
-              <div key={op.id} className="flex items-center justify-between py-2 border-b border-[#1e2d3d] last:border-0">
-                <div>
-                  <div className="text-xs font-medium text-white">{op.company}</div>
-                  <div className="text-[11px] text-slate-400">{op.type}</div>
+          {opportunities.length === 0 ? (
+            <p className="text-xs text-slate-500 py-4 text-center">No opportunities yet — sync CRM data first</p>
+          ) : (
+            <div className="space-y-3">
+              {opportunities.map(op => (
+                <div key={op.id} className="flex items-center justify-between py-2 border-b border-[#1e2d3d] last:border-0">
+                  <div>
+                    <div className="text-xs font-medium text-white">{op.company}</div>
+                    <div className="text-[11px] text-slate-400">{op.type}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-semibold text-white">${op.value.toLocaleString()}</div>
+                    <div className={`text-[11px] font-medium ${CONFIDENCE_COLORS[op.confidence]}`}>{op.confidence}</div>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-xs font-semibold text-white">${op.value.toLocaleString()}</div>
-                  <div className={`text-[11px] font-medium ${CONFIDENCE_COLORS[op.confidence]}`}>{op.confidence}</div>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Quick Actions */}
         <div className="bg-[#112240] rounded-xl border border-[#1e2d3d] p-5">
           <h3 className="text-sm font-semibold text-white flex items-center gap-2 mb-4">
             <Zap size={15} className="text-yellow-400" /> Quick Actions
           </h3>
           <div className="grid grid-cols-2 gap-2">
             {[
-              { label: 'Create Follow-up Task', icon: '✅', color: 'blue' },
-              { label: 'Generate Email Draft', icon: '📧', color: 'purple' },
-              { label: 'Check Renewal Calendar', icon: '📅', color: 'indigo' },
-              { label: 'Run Risk Analysis', icon: '🔍', color: 'orange' },
-              { label: 'Export Report', icon: '📊', color: 'teal' },
-              { label: 'Sync CRM Data', icon: '🔄', color: 'cyan' },
+              { label: 'Create Follow-up Task', icon: '✅' },
+              { label: 'Generate Email Draft', icon: '📧' },
+              { label: 'Check Renewal Calendar', icon: '📅' },
+              { label: 'Run Risk Analysis', icon: '🔍' },
+              { label: 'Export Report', icon: '📊' },
+              { label: 'Sync CRM Data', icon: '🔄' },
             ].map((action, i) => (
               <button key={i} className="flex items-center gap-2 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-xl px-3 py-2.5 text-xs text-slate-600 hover:text-indigo-800 transition-all text-left">
                 <span className="text-base">{action.icon}</span>
@@ -367,8 +324,5 @@ function StatCard({ icon: Icon, iconBg, title, value, change, up, subtitle, extr
 
 function RiskScore({ score, level }) {
   const color = level === 'High' ? 'text-red-400' : level === 'Medium' ? 'text-yellow-400' : 'text-green-400'
-  return (
-    <span className={`font-bold text-xs ${color}`}>{score}</span>
-  )
+  return <span className={`font-bold text-xs ${color}`}>{score}</span>
 }
-
